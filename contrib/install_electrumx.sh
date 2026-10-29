@@ -4,21 +4,35 @@ set -eu
 
 if [ "${1:-}" = "--help" ]; then
     printf '%s\n' \
-        'Usage: sh contrib/install_electrumx.sh' \
+        'Usage: sh contrib/install_electrumx.sh [--explorer [explorer setup options]]' \
         'Optional environment: PYTHON=/path/to/python3 VENV_DIR=/path/to/venv' \
         'Linux prerequisites: Python with venv and matching development headers,' \
         'a C/C++ compiler and libleveldb-dev (Debian/Ubuntu: python3-dev).' \
         'Python 3.10 is the tested runtime. This script does not alter Core or OS settings.'
+    printf '%s\n' '--explorer requires root/systemd and defaults VENV_DIR to /opt/rtm-explorer/venv.' \
+        'Explorer setup options: --core-config PATH --port 8080 --public-host IP_OR_DOMAIN'
     exit 0
 fi
-if [ "$#" -ne 0 ]; then
+INSTALL_EXPLORER=0
+if [ "${1:-}" = "--explorer" ]; then
+    INSTALL_EXPLORER=1
+    shift
+    if [ "$(id -u)" != 0 ]; then
+        printf '%s\n' '--explorer requires root to configure its separate systemd service.' >&2
+        exit 2
+    fi
+elif [ "$#" -ne 0 ]; then
     printf '%s\n' 'Unexpected arguments; use --help.' >&2
     exit 2
 fi
 
 SOURCE_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 PYTHON=${PYTHON:-python3}
-VENV_DIR=${VENV_DIR:-"${HOME:?HOME must be set}/.local/share/electrumx-rtm/venv"}
+if [ "$INSTALL_EXPLORER" = 1 ]; then
+    VENV_DIR=${VENV_DIR:-/opt/rtm-explorer/venv}
+else
+    VENV_DIR=${VENV_DIR:-"${HOME:?HOME must be set}/.local/share/electrumx-rtm/venv"}
+fi
 
 command -v "$PYTHON" >/dev/null 2>&1 || {
     printf '%s\n' 'Python executable not found; set PYTHON to its path.' >&2
@@ -48,3 +62,7 @@ printf '\n%s\n' \
     "Server executable: $VENV_DIR/bin/electrumx_server" \
     'Set COIN=Raptoreum, NET=mainnet, DAEMON_URL and a fresh DB_DIRECTORY before starting.' \
     'Keep Core RPC private. Wait for Core synchronization and the asset index rebuild.'
+
+if [ "$INSTALL_EXPLORER" = 1 ]; then
+    "$VENV_DIR/bin/python" "$SOURCE_DIR/contrib/install_explorer.py" --venv "$VENV_DIR" "$@"
+fi

@@ -4,9 +4,12 @@ version = '1.16.0'
 setuptools.setup(
     name='e-x',
     version=version,
-    scripts=['electrumx_server', 'electrumx_rpc', 'electrumx_compact_history'],
+    scripts=['electrumx_server', 'electrumx_rpc', 'electrumx_compact_history',
+             'electrumx_explorer'],
     python_requires='>=3.7',
     install_requires=['aiorpcX[ws]>=0.18.5,<0.19', 'attrs',
+                      # aiorpcX 0.18 uses the legacy two-argument WS handler.
+                      'websockets>=10.4,<14',
                       'plyvel', 'pylru', 'aiohttp>=3.3,<4'],
     extras_require={
         'rapidjson': ['python-rapidjson>=0.4.1,<1.0.0'],
@@ -25,6 +28,7 @@ setuptools.setup(
         'cpupower': ['cpupower'],
     },
     packages=setuptools.find_packages(include=('electrumx*',)),
+    package_data={'electrumx.explorer': ['static/*.html', 'static/*.css', 'static/*.js']},
     description='ElectrumX Server',
     author='Electrum developers',
     author_email='electrumdev@gmail.com',

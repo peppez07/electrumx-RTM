@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#132338">
+  <meta name="description" content="Explore Raptoreum mainnet blocks, transactions, addresses and assets.">
+  <title>Raptoreum Explorer</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script defer src="/static/app.js"></script>
+</head>
+<body>
+  <div class="network-strip"><div class="container"><span><i class="dot"></i> Raptoreum Mainnet</span><span id="strip-status">Connecting to the network…</span></div></div>
+  <header class="container header">
+    <a class="brand" href="#/"><span class="brand-mark">R</span><span>raptoreum<span class="brand-sub">BLOCKCHAIN EXPLORER</span></span></a>
+    <nav aria-label="Main navigation"><a href="#/">Overview</a><a href="#/blocks">Blocks</a><a href="#/assets">Assets</a><a href="#/api">API</a><button id="theme" class="icon-button" aria-label="Toggle dark mode">◐</button></nav>
+  </header>
+  <section class="hero"><div class="container"><div class="eyebrow">THE RAPTOREUM BLOCKCHAIN EXPLORER</div><h1>Every block. Every asset.</h1><p>A clear view of the Raptoreum network.</p>
+    <form id="search" role="search"><label class="sr-only" for="query">Search the blockchain</label><span class="search-label">All filters <span>⌄</span></span><input id="query" name="query" placeholder="Search address, transaction, block or asset" autocomplete="off" required maxlength="128"><button type="submit" aria-label="Search">Search <span>↗</span></button></form>
+    <div class="hero-foot"><span class="live-indicator"></span> Mainnet data · Powered by ElectrumX &amp; Raptoreum Core</div>
+  </div></section>
+  <main class="container" id="main" tabindex="-1">
+    <div id="sync-banner" role="status" aria-live="polite"></div>
+    <div id="view" aria-live="polite"><div class="loading card">Connecting to Raptoreum…</div></div>
+  </main>
+  <footer class="container"><div><a href="#/" class="footer-brand">Raptoreum Explorer</a><p>Open network. Clear information.</p><span class="muted">Mainnet · ElectrumX RTM</span></div><div><strong>Support development</strong><p>RTM <span class="donation">RVLFQj4RiMCDDrWGZXRd2ui1NKGQ9ieooz</span></p><p>ETH <span class="donation">0xf6d9b356D15dBB089B2033173A3993c14a8955CD</span></p></div></footer>
+</body>
+</html>
