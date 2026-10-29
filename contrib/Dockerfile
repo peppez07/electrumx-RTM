@@ -1,34 +1,31 @@
-# example of Dockerfile that builds release of electrumx-1.13.0
-# ENV variables can be overrided on the `docker run` command
+# Build from the repository root:
+# docker build -f contrib/Dockerfile -t electrumx-rtm .
+FROM python:3.10-slim-bookworm
 
-FROM ubuntu:20.04
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential libleveldb-dev ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /
-ADD https://github.com/spesmilo/electrumx/archive/1.15.0.tar.gz /
-RUN tar zxvf *.tar.gz
+COPY . /src
+RUN pip install --no-cache-dir /src \
+    && rm -rf /src \
+    && useradd --system --uid 10001 --create-home electrumx \
+    && mkdir /db \
+    && chown electrumx:electrumx /db
 
-RUN apt-get update && \
-        apt-get -y install python3.8 python3-pip librocksdb-dev libsnappy-dev libbz2-dev libz-dev liblz4-dev
-
-RUN cd /electrumx* && pip3 install .[rocksdb]
-
-ENV SERVICES="tcp://:50001"
-ENV COIN=Bitcoin
-ENV DB_DIRECTORY=/db
-ENV DAEMON_URL="http://username:password@hostname:port/"
-ENV ALLOW_ROOT=true
-ENV DB_ENGINE=rocksdb
-ENV MAX_SEND=10000000
-ENV BANDWIDTH_UNIT_COST=50000
-ENV CACHE_MB=2000
+ENV COIN=Raptoreum \
+    NET=mainnet \
+    DB_DIRECTORY=/db \
+    DB_ENGINE=leveldb \
+    SERVICES="tcp://127.0.0.1:50001,rpc://127.0.0.1:8000" \
+    CACHE_MB=64 \
+    PYTHONUNBUFFERED=1
 
 VOLUME /db
+USER electrumx
+STOPSIGNAL SIGTERM
+CMD ["electrumx_server"]
 
-RUN mkdir -p "$DB_DIRECTORY" && ulimit -n 1048576
-
-CMD ["/usr/bin/python3", "/usr/local/bin/electrumx_server"]
-
-# build it with eg.: `docker build -t electrumx .`
-# run it with eg.:
-# `docker run -d --net=host -v /home/electrumx/db/:/db -e DAEMON_URL="http://youruser:yourpass@localhost:8332" -e REPORT_SERVICES=tcp://example.com:50001 electrumx`
-# for a proper clean shutdown, send TERM signal to the running container eg.: `docker kill --signal="TERM" CONTAINER_ID`
+# Supply DAEMON_URL at runtime. With a Core RPC on the Linux host, use
+# --network host. Keep credentials in an external --env-file.
+# Bind-mounted /db must be writable by UID 10001. Use a fresh asset DB directory.

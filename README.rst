@@ -60,6 +60,35 @@ retry after synchronization or restart stale pagination.
 Mainnet setup
 =============
 
+Install this checkout
+---------------------
+
+On Linux, install Python with ``venv`` support and matching development headers,
+a C/C++ compiler, and the LevelDB headers (``python3-dev`` and ``libleveldb-dev``
+on Debian/Ubuntu; match the development package to your chosen Python). From the repository
+root, install into an isolated environment::
+
+    sh contrib/install_electrumx.sh
+
+Set ``PYTHON`` or ``VENV_DIR`` to choose the Python executable or installation
+directory. The installer checks that all RTM asset components are present and
+prints the server executable path. It does not install or configure Core.
+When using ``contrib/systemd/electrumx.service``, change ``ExecStart`` to that
+printed executable path and ensure the ``electrumx`` service account can access
+the virtual environment and write to its configured database directory.
+
+Alternatively, build the Docker image from this checkout::
+
+    docker build -f contrib/Dockerfile -t electrumx-rtm .
+
+The image defaults to RTM mainnet and runs as an unprivileged user. Supply
+``DAEMON_URL`` through an external environment file. On Linux, use
+``--network host`` when Core RPC is bound to the host's localhost address.
+Bind-mounted database directories must be writable by UID 10001.
+
+Core and server configuration
+-----------------------------
+
 The implementation targets Raptoreum Core ``2.0.3.01-mainnet`` and has been tested
 with Python 3.10 and LevelDB on Linux. Use a mainnet Core full node with
 ``server=1``, ``txindex=1``, ``assetindex=1``, and ``prune=0``. Keep Core RPC
@@ -97,9 +126,10 @@ Supported asset destinations are P2PKH. Future-transaction asset outputs and
 noncanonical or unsupported unique ranges remain visible but are marked
 ``spendable: false``.
 
-The offline Linux regression suite passed with 388 tests and 40 skips. Live
-mainnet coin and asset functionality checks remain pending Core synchronization;
-wallet transfer behavior has not yet been validated end to end.
+Offline tests cover parsing, storage and rollback, mempool behavior, individual
+wallet request dispatch, and clean package installation. Live mainnet coin and
+asset functionality checks remain pending Core synchronization; wallet transfer
+behavior has not yet been validated end to end.
 
 Support development
 ===================
