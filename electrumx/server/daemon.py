@@ -302,6 +302,9 @@ class Daemon:
         self._height = await self._send_single('getblockcount')
         return self._height
 
+    async def getblockchaininfo(self):
+        return await self._send_single('getblockchaininfo')
+
     def cached_height(self):
         '''Return the cached daemon height.
 

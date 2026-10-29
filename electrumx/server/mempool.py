@@ -334,8 +334,7 @@ class MemPool:
                                    if not txin.is_generation())
                 txout_pairs = tuple((to_hashX(txout.pk_script), txout.value)
                                     for txout in tx.outputs)
-                txs[hash] = MemPoolTx(txin_pairs, None, txout_pairs,
-                                      0, tx_size)
+                txs[hash] = self._make_mempool_tx(tx, txin_pairs, txout_pairs, tx_size)
             return txs
 
         # Thread this potentially slow operation so as not to block
@@ -353,6 +352,9 @@ class MemPool:
         utxo_map = {prevout: utxo for prevout, utxo in zip(prevouts, utxos)}
 
         return self._accept_transactions(tx_map, utxo_map, touched)
+
+    def _make_mempool_tx(self, tx, prevouts, out_pairs, size):
+        return MemPoolTx(prevouts, None, out_pairs, 0, size)
 
     #
     # External interface

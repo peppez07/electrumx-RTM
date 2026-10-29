@@ -7,11 +7,12 @@
 
 from asyncio import Event
 
-from aiorpcx import _version as aiorpcx_version, TaskGroup
+from aiorpcx import _version as aiorpcx_version, TaskGroup, run_in_thread
 
 import electrumx
 from electrumx.lib.server_base import ServerBase
 from electrumx.lib.util import version_string
+from electrumx.lib.hash import hash_to_hex_str
 from electrumx.server.db import DB
 from electrumx.server.mempool import MemPool, MemPoolAPI
 from electrumx.server.session import SessionManager
@@ -98,7 +99,7 @@ class Controller(ServerBase):
         BlockProcessor = env.coin.BLOCK_PROCESSOR
 
         async with Daemon(env.coin, env.daemon_url) as daemon:
-            db = DB(env)
+            db = (env.coin.DBCLS or DB)(env)
             bp = BlockProcessor(env, db, daemon, notifications)
 
             # Set notifications up to implement the MemPoolAPI
@@ -110,8 +111,21 @@ class Controller(ServerBase):
             notifications.mempool_hashes = daemon.mempool_hashes
             notifications.raw_transactions = daemon.getrawtransactions
             notifications.lookup_utxos = db.lookup_utxos
+            if env.coin.MEMPOOLCLS:
+                notifications.db_tip = lambda: db.db_tip
+
+                async def lookup_asset_utxos(prevouts):
+                    return await run_in_thread(db.lookup_asset_utxos, prevouts)
+                notifications.lookup_asset_utxos = lookup_asset_utxos
+
+                async def asset_chain_ready():
+                    info = await daemon.getblockchaininfo()
+                    return (not info.get('initialblockdownload', True)
+                            and info.get('blocks') == db.db_height
+                            and info.get('bestblockhash') == hash_to_hex_str(db.db_tip))
+                notifications.asset_chain_ready = asset_chain_ready
             MemPoolAPI.register(Notifications)
-            mempool = MemPool(env.coin, notifications)
+            mempool = (env.coin.MEMPOOLCLS or MemPool)(env.coin, notifications)
 
             session_mgr = SessionManager(env, db, bp, daemon, mempool,
                                          shutdown_event)

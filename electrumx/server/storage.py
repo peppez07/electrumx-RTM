@@ -89,6 +89,13 @@ class LevelDB(Storage):
         self.write_batch = partial(self.db.write_batch, transaction=True,
                                    sync=True)
 
+    def iterator_from(self, prefix, start):
+        with self.db.iterator(start=start or prefix) as iterator:
+            for key, value in iterator:
+                if not key.startswith(prefix):
+                    break
+                yield key, value
+
 
 class RocksDB(Storage):
     '''RocksDB database engine.'''
@@ -120,6 +127,14 @@ class RocksDB(Storage):
 
     def iterator(self, prefix=b'', reverse=False):
         return RocksDBIterator(self.db, prefix, reverse)
+
+    def iterator_from(self, prefix, start):
+        iterator = self.db.iteritems()
+        iterator.seek(start or prefix)
+        for key, value in iterator:
+            if not key.startswith(prefix):
+                break
+            yield key, value
 
 
 class RocksDBWriteBatch:

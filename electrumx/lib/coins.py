@@ -46,6 +46,12 @@ import electrumx.lib.tx as lib_tx
 from electrumx.lib.tx import Tx
 import electrumx.lib.tx_dash as lib_tx_dash
 import electrumx.lib.tx_axe as lib_tx_axe
+from electrumx.lib.tx_raptoreum import DeserializerRaptoreum
+from electrumx.lib.raptoreum_assets import parse_asset_script
+from electrumx.server.raptoreum_db import RaptoreumDB
+from electrumx.server.raptoreum_block_processor import RaptoreumBlockProcessor
+from electrumx.server.raptoreum_mempool import RaptoreumMemPool
+from electrumx.server.raptoreum_session import RaptoreumElectrumX
 import electrumx.server.block_processor as block_proc
 import electrumx.server.daemon as daemon
 from electrumx.server.session import (ElectrumX, DashElectrumX,
@@ -79,6 +85,8 @@ class Coin:
     DESERIALIZER = lib_tx.Deserializer
     DAEMON = daemon.Daemon
     BLOCK_PROCESSOR = block_proc.BlockProcessor
+    DBCLS = None
+    MEMPOOLCLS = None
     HEADER_VALUES = ('version', 'prev_block_hash', 'merkle_root', 'timestamp',
                      'bits', 'nonce')
     HEADER_UNPACK = struct.Struct('< I 32s 32s I I I').unpack_from
@@ -3939,8 +3947,16 @@ class Raptoreum(Coin):
        'ny1.raptoreum.com t',
        'ger1.raptoreum.com t'
     ]
-    SESSIONCLS = DashElectrumX
+    SESSIONCLS = RaptoreumElectrumX
     DAEMON = daemon.DashDaemon
-    DESERIALIZER = lib_tx_dash.DeserializerDash
+    DESERIALIZER = DeserializerRaptoreum
+    DBCLS = RaptoreumDB
+    MEMPOOLCLS = RaptoreumMemPool
+    BLOCK_PROCESSOR = RaptoreumBlockProcessor
+
+    @classmethod
+    def hashX_from_script(cls, script):
+        transfer = parse_asset_script(script)
+        return transfer.hashX if transfer else super().hashX_from_script(script)
 
 
