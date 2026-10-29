@@ -107,6 +107,7 @@ Support development
 Donations help support development, maintenance, and testing.
 
 * **RTM (Raptoreum mainnet):** ``RVLFQj4RiMCDDrWGZXRd2ui1NKGQ9ieooz``
+* **ETH (Ethereum):** ``0xf6d9b356D15dBB089B2033173A3993c14a8955CD``
 
 Documentation
 =============
