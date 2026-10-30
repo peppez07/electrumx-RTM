@@ -356,7 +356,9 @@ class Explorer:
         return json_response({'matches': matches})
 
 
-def create_app(core, electrum, rate_limit=120, status_ttl=10, enable_wallet_api=False):
+def create_app(core, electrum, rate_limit=120, status_ttl=10, enable_wallet_api=False, metrics_file=None):
+    from .resources import ResourceSnapshot
+    resources = ResourceSnapshot(metrics_file)
     from .compat import PUBLIC_STATUS_PATHS, register_compat
     from .wallet import (CAPABILITIES_PATH, POST_PATHS, BROADCAST_STARTED,
                          SUBMITTED_TXID, register_wallet, unknown_submission)
@@ -365,7 +367,7 @@ def create_app(core, electrum, rate_limit=120, status_ttl=10, enable_wallet_api=
     semaphore = asyncio.Semaphore(8)
 
     async def guarded(request, handler):
-        if (request.method == 'OPTIONS' or request.path in ('/api/v1/status', '/api/v1/health') or
+        if (request.method == 'OPTIONS' or request.path in ('/api/v1/status', '/api/v1/health', '/api/v1/resources') or
                 request.path == CAPABILITIES_PATH or request.path in PUBLIC_STATUS_PATHS or
                 (request.path in POST_PATHS and not enable_wallet_api)):
             return await handler(request)
@@ -446,6 +448,10 @@ def create_app(core, electrum, rate_limit=120, status_ttl=10, enable_wallet_api=
     async def health(request):
         return json_response({'service':'electrumx-rtm-explorer', 'version':1})
 
+    async def resource_status(request):
+        return json_response(await resources.get())
+
+    app.router.add_get('/api/v1/resources', resource_status)
     app.router.add_get('/api/v1/health', health)
     app.router.add_get('/api/v1/status', status)
     app.router.add_get('/api/v1/overview', explorer.overview)

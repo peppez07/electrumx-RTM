@@ -189,6 +189,8 @@ Setup creates dedicated service accounts and these files/services:
 * ``rtm-electrumx-assets.service`` -- one asset-capable RTM backend.
 * ``rtm-electrumx-assets.timer`` -- retries its startup while Core synchronizes.
 * ``rtm-explorer.service`` -- the web interface and HTTP API.
+* ``rtm-explorer-metrics.timer`` / ``rtm-explorer-metrics.service`` -- a short
+  host resource sample every 60 seconds, shared by all visitors.
 * ``/etc/rtm-electrumx/`` -- restricted backend environment, RPC settings and
   optional TLS copies. ``/opt/rtm-electrumx/core_ready.py`` is the startup gate.
 * ``/etc/rtm-explorer/`` -- restricted explorer environment and minimal Core
@@ -404,7 +406,9 @@ bundled locally without a third-party image request.
 
 The UI uses bundled HTML, CSS and JavaScript without a frontend framework,
 external fonts or a separate statistics database. Hidden tabs pause polling;
-visible pages refresh status every 30 seconds with failure backoff. Dashboard,
+visible pages refresh status every 60 seconds with failure backoff. The overview
+is not reloaded when the indexed tip is unchanged. Less common pages remain
+available in the More menu, and Node shows resource usage during synchronization. Dashboard,
 network and smartnode snapshots share a process-local cache capped at 2 MiB
 and 32 entries, invalidated by the indexed tip and a 30-second lifetime.
 Snapshot timestamps show when these public views were collected. Wallet
@@ -412,12 +416,55 @@ balances, fees, policies and broadcasts are not cached. Holders load only when
 the holder tab is selected. Lost RPC connections show explicitly stale
 last-known progress; unknown progress is displayed as unavailable.
 
+VPS resource monitoring
+-----------------------
+
+Managed installation adds a low-priority, standard-library host sampler. It
+reads small Linux CPU/memory counters and root-filesystem space once per minute,
+then atomically replaces a small JSON snapshot under
+``/var/lib/rtm-explorer/metrics``. It does not query Core, scan blockchain files,
+run Docker commands or maintain a monitoring database. The sampler exits after
+each sample, with ``Nice=19``, a 5% CPU ceiling and a 48 MiB memory ceiling.
+These are limits, not a claim that sampling has zero overhead.
+
+The explorer container receives only that directory as a read-only mount; it
+gets no Docker socket or host process filesystem. The HTTP reader caches its
+bounded, allowlisted snapshot for 10 seconds. Browser resource refreshes are
+limited to once per minute on the overview/Node page and pause in hidden tabs.
+All visitors share the same host sample. Existing explorer resource limits
+remain in place, separately from Core's resource budget.
+
+CPU usage is the VPS-wide non-idle percentage excluding I/O wait, averaged
+between samples. The first CPU sample is unavailable until a second reading.
+RAM usage is total minus ``MemAvailable``, so reclaimable cache is not mistaken
+for unavailable memory. Swap is shown separately. Disk usage describes only
+the root filesystem, not every attached volume; available space can differ
+from total minus used because of filesystem reservations. These figures are
+resource measurements, not a benchmark or an efficiency score. No hostnames,
+IP addresses, process lists or credential paths appear in the public response.
+
+Snapshots older than 180 seconds are marked stale; missing/invalid snapshots
+are marked unavailable. These routes work while Core is synchronizing, without
+relaxing the synchronization gate on coin and asset data. Check the sampler::
+
+    sudo systemctl list-timers rtm-explorer-metrics.timer --no-pager
+    sudo journalctl -u rtm-explorer-metrics.service -n 30 --no-pager
+    curl -fsS http://127.0.0.1:8080/api/v1/resources | python3 -m json.tool
+
+Reinstalling through the complete stack installer configures the sampler for
+both native and Docker explorer services. For a manual explorer process,
+``EXPLORER_METRICS_FILE`` points to a readable host snapshot; without a snapshot,
+resource monitoring is unavailable. It never substitutes container-only values
+for VPS usage.
+
 Explorer HTTP API
 -----------------
 
 The explorer data routes are GET under ``/api/v1/``. The browser's API page documents them:
 
 * ``health`` -- explorer process health without a Core call; not chain readiness.
+* ``resources`` -- cached host CPU, RAM, swap and root-filesystem usage. No Core
+  call is made; missing or stale samples are explicitly marked.
 * ``overview?limit=5`` -- bounded shared public dashboard snapshot (maximum 10).
 * ``network`` and ``smartnodes?limit=25&offset=0`` -- public network snapshots.
 * ``status`` -- readiness and synchronization; available during initial sync.

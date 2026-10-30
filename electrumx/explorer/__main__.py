@@ -22,7 +22,8 @@ def main():
         print('Explorer configuration invalid. Set EXPLORER_CORE_CONFIG to a readable mainnet RPC config and valid local ports.', file=sys.stderr)
         return 2
     app = create_app(CoreClient(**config), ElectrumClient(electrum_host, electrum_port),
-                     enable_wallet_api=os.environ.get('EXPLORER_WALLET_API', '0') == '1')
+                     enable_wallet_api=os.environ.get('EXPLORER_WALLET_API', '0') == '1',
+                     metrics_file=os.environ.get('EXPLORER_METRICS_FILE'))
     web.run_app(app, host=os.environ.get('EXPLORER_HOST', '0.0.0.0'), port=port,
                 access_log=None, print=None)
     return 0

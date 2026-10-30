@@ -22,6 +22,33 @@ _config_spec = importlib.util.spec_from_file_location('rtm_explorer_config',
 _config = importlib.util.module_from_spec(_config_spec)
 _config_spec.loader.exec_module(_config)
 load_core_config = _config.load_core_config
+METRICS_DIR = '/var/lib/rtm-explorer/metrics'
+METRICS_MARKER = '# Managed by electrumx-RTM host metrics'
+
+
+def stage_metrics(directory, runtime, units):
+    directory, runtime, units = Path(directory), Path(runtime), Path(units)
+    names = ('rtm-explorer-metrics.service', 'rtm-explorer-metrics.timer')
+    for name in names:
+        path = units/name
+        if path.exists() and METRICS_MARKER not in path.read_text():
+            raise ValueError('Refusing to replace an unrelated host metrics service.')
+    for folder in (directory, runtime, units):
+        folder.mkdir(parents=True, exist_ok=True)
+    directory.chmod(0o750)
+    runtime.chmod(0o755)
+    shutil.copyfile(Path(__file__).parent/'host_metrics.py', runtime/'host_metrics.py')
+    (runtime/'host_metrics.py').chmod(0o644)
+    q = lambda path: '"'+str(path).replace('\\','\\\\').replace('"','\\"').replace('%','%%')+'"'
+    (units/names[0]).write_text(METRICS_MARKER+'\n[Unit]\nDescription=Raptoreum host resource sampler\n'
+        '[Service]\nType=oneshot\nUser=rtm-explorer\nGroup=rtm-explorer\n'
+        'ExecStart=/usr/bin/python3 '+q(runtime/'host_metrics.py')+' --directory '+q(directory)+'\n'
+        'Nice=19\nIOSchedulingClass=idle\nMemoryMax=48M\nCPUQuota=5%\nTimeoutStartSec=15\n'
+        'NoNewPrivileges=true\nPrivateTmp=true\nProtectHome=true\nProtectSystem=strict\n'
+        'ReadWritePaths='+q(directory)+'\nRestrictAddressFamilies=AF_UNIX\n')
+    (units/names[1]).write_text(METRICS_MARKER+'\n[Unit]\nDescription=Sample VPS resources once per minute\n'
+        '[Timer]\nOnBootSec=15\nOnUnitActiveSec=60\nAccuracySec=5\nUnit='+names[0]+'\n'
+        '[Install]\nWantedBy=timers.target\n')
 
 
 def wait_for_health(port, attempts=15):
@@ -46,8 +73,9 @@ def service_text(args, uid, gid):
             '--user {}:{} --memory 192m --memory-swap 256m --cpus 0.5 '
             '--cap-drop ALL --security-opt no-new-privileges --read-only '
             '--tmpfs /tmp:rw,noexec,nosuid,size=16m --env-file {} '
-            '-v {} {} electrumx_explorer').format(uid, gid, quote(env_path),
-                quote(str(config_dir)+':'+str(config_dir)+':ro'), quote(args.image))
+            '-v {} -v {} {} electrumx_explorer').format(uid, gid, quote(env_path),
+                quote(str(config_dir)+':'+str(config_dir)+':ro'),
+                quote(METRICS_DIR+':'+METRICS_DIR+':ro'), quote(args.image))
         runtime = 'Requires=docker.service\nAfter=docker.service network-online.target'
         user = ''
         stop = 'ExecStop=/usr/bin/docker stop -t 20 rtm-explorer\n'
@@ -92,6 +120,13 @@ def stage_files(args):
             output.write('EXPLORER_CORE_CONFIG={}\nEXPLORER_HOST={}\nEXPLORER_PORT={}\n'
                 'EXPLORER_ELECTRUM_HOST=127.0.0.1\nEXPLORER_ELECTRUM_PORT={}\n'.format(
                 core_file.resolve(), args.bind, args.port, args.electrum_port))
+    metrics_setting = 'EXPLORER_METRICS_FILE='+METRICS_DIR+'/host.json'
+    existing_metrics = [line for line in env_file.read_text().splitlines() if line.startswith('EXPLORER_METRICS_FILE=')]
+    if existing_metrics and existing_metrics != [metrics_setting]:
+        raise ValueError('Managed explorer requires its shared host metrics path.')
+    if not existing_metrics:
+        with env_file.open('a') as output:
+            output.write(metrics_setting+'\n')
     wallet_mode = getattr(args, 'wallet_api', None)
     if wallet_mode is not None:
         lines = [line for line in env_file.read_text().splitlines()
@@ -202,7 +237,13 @@ def main(argv=None):
         return 2
     unit.write_text(service_text(args, user.pw_uid, user.pw_gid))
     unit.chmod(0o644)
+    metrics = Path(METRICS_DIR)
+    stage_metrics(metrics, Path('/opt/rtm-explorer'), Path('/etc/systemd/system'))
+    metrics.parent.chmod(0o755)
+    os.chown(metrics, user.pw_uid, user.pw_gid)
     subprocess.run(['systemctl', 'daemon-reload'], check=True)
+    subprocess.run(['systemctl', 'enable', '--now', 'rtm-explorer-metrics.timer'], check=True)
+    subprocess.run(['systemctl', 'start', 'rtm-explorer-metrics.service'], check=True)
     subprocess.run(['systemctl', 'enable', 'rtm-explorer.service'], check=True)
     subprocess.run(['systemctl', 'restart', 'rtm-explorer.service'], check=True)
     wait_for_health(args.port)

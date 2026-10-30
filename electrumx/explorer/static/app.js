@@ -22,11 +22,19 @@ function progressLabel(core) {
   const value = typeof raw==='number' || (typeof raw==='string' && raw.trim()!=='') ? Number(raw) : NaN;
   return Number.isFinite(value) ? (Math.max(0,Math.min(1,value))*100).toFixed(3)+'%' : 'Unavailable';
 }
-function refreshDelay(failures) { return Math.min(120000,30000 * 2**failures); }
-if (typeof module !== 'undefined') module.exports = {escapeHTML, formatAtomic, loadAssetData, progressLabel, refreshDelay};
+function refreshDelay(failures) { return Math.min(240000,60000 * 2**failures); }
+function formatBytes(value) {
+  if (typeof value!=='number' || !Number.isFinite(value) || value<0) return 'Unavailable';
+  const units=['B','KiB','MiB','GiB','TiB'];let unit=0;
+  while(value>=1024 && unit<units.length-1) { value/=1024;unit++; }
+  return Number(value.toFixed(1)).toLocaleString('en-US')+' '+units[unit];
+}
+if (typeof module !== 'undefined') module.exports = {escapeHTML, formatAtomic, loadAssetData, progressLabel, refreshDelay, formatBytes};
 if (typeof document !== 'undefined') {
   const e = escapeHTML, enc = encodeURIComponent, $ = id => document.getElementById(id);
   let currentStatus = null, generation = 0, refreshing = false, pollTimer, failures = 0;
+  let currentResources = null, resourcesChecked = -Infinity, resourcesPending = null;
+  let renderFailed = false;
   const integer = value => value === undefined || value === null ? '—' : Number(value).toLocaleString('en-US');
   const shorten = value => value ? String(value).slice(0, 13) + '…' + String(value).slice(-7) : '—';
   const link = (kind, id, label) => `<a class="mono" href="#/${kind}/${enc(id)}">${e(label ?? shorten(id))}</a>`;
@@ -52,11 +60,43 @@ if (typeof document !== 'undefined') {
     } finally { clearTimeout(timeout); }
   }
 
+  async function loadResources() {
+    if(document.hidden) return;
+    if(resourcesPending) return resourcesPending;
+    if(Date.now()-resourcesChecked < 60000) return;
+    resourcesChecked=Date.now();
+    resourcesPending=api('resources').then(data=>{currentResources=data}).catch(()=>{currentResources={available:false}}).finally(()=>{resourcesPending=null});
+    return resourcesPending;
+  }
+
+  function resourceCards() {
+    const data=currentResources;
+    if(!data?.available) return '<div class="card resource-unavailable">VPS resource information is unavailable.</div>';
+    const percent=data.cpu.used_percent;
+    const parts=[['CPU',percent===null ? 'Collecting sample' : percent.toFixed(1)+'%',percent],
+      ['RAM',formatBytes(data.memory.used_bytes)+' / '+formatBytes(data.memory.total_bytes),data.memory.used_bytes/data.memory.total_bytes*100],
+      ['Disk · root filesystem',formatBytes(data.disk.used_bytes)+' / '+formatBytes(data.disk.total_bytes),data.disk.used_bytes/data.disk.total_bytes*100]];
+    return `<div class="resource-grid ${data.stale ? 'stale' : ''}">${parts.map(([label,value,usage])=>`<div class="card resource-card"><span class="stat-label">${e(label)}</span><strong>${e(value)}</strong>${usage===null ? '' : `<meter min="0" max="100" value="${usage}" aria-label="${e(label)} usage">${usage.toFixed(1)}%</meter>`}</div>`).join('')}</div><p class="resource-note">${data.stale ? 'Last known sample · ' : ''}Whole VPS · ${e(age(data.sampled_at))} · sampled once per minute</p>`;
+  }
+
+  function updateResourceSummary() {
+    const home=!location.hash || location.hash==='#/' || location.hash==='#';
+    $('resource-summary').hidden=!home;
+    if(home) $('resource-summary').innerHTML=resourceCards();
+  }
+
+  async function nodePage() {
+    await loadResources();
+    const data=currentResources;
+    return heading('Node resources','CPU, memory and storage for this VPS')+resourceCards()+
+      `<section class="card details">${row('Sample status',data?.available ? data.stale ? 'Stale: monitoring has stopped or is delayed' : 'Current' : 'Unavailable')}${data?.available ? row('Sample time',e(new Date(data.sampled_at*1000).toLocaleString()))+row('Available RAM',e(formatBytes(data.memory.available_bytes)))+row('Swap used',e(formatBytes(data.swap.used_bytes))+' / '+e(formatBytes(data.swap.total_bytes)))+row('Available disk space',e(formatBytes(data.disk.available_bytes)))+row('CPU I/O wait',data.cpu.iowait_percent===null ? 'Collecting sample' : e(data.cpu.iowait_percent.toFixed(1))+'%') : ''}</section><p class="subtitle">These figures describe the whole VPS, including Core and the operating system. CPU is averaged between samples. RAM uses available memory, including reclaimable cache. Disk figures describe the root filesystem. Sampling is shared between visitors and makes no blockchain requests.</p>`;
+  }
+
   function updateStatus(status) {
     currentStatus = status;
     const core = status.core || {}, index = status.electrumx || {};
     $('strip-status').textContent = status.ready ? `Block #${integer(core.blocks)} · Connected` : `${status.core_stale ? 'Last known' : status.phase==='core_unavailable' ? 'Core unavailable' : 'Synchronizing'} · ${integer(core.blocks)} blocks`;
-    $('refresh-info').textContent = `${status.core_stale ? 'Last Core response' : 'Checked'} ${status.core_checked_at ? new Date(status.core_checked_at*1000).toLocaleTimeString() : '—'} · 30s refresh`;
+    $('refresh-info').textContent = `${status.core_stale ? 'Last Core response' : 'Checked'} ${status.core_checked_at ? new Date(status.core_checked_at*1000).toLocaleTimeString() : '—'} · 60s refresh`;
     if (status.ready) { $('sync-banner').innerHTML = ''; return; }
     const progress = progressLabel(core), percent = progress==='Unavailable' ? null : parseFloat(progress);
     const label = {core_syncing:'Raptoreum Core is synchronizing', index_syncing:'The ElectrumX asset index is catching up', index_unavailable:'Waiting for the ElectrumX asset service', core_unavailable:'Waiting for Raptoreum Core', wrong_network:'Mainnet connection required'}[status.phase] || 'Connecting to the network';
@@ -67,15 +107,13 @@ if (typeof document !== 'undefined') {
     const core = status.core || {}, index = status.electrumx || {};
     return `<div class="card stats">${[
       ['Latest block', integer(core.blocks), status.ready ? 'Core synchronized' : 'Blocks processed so far'],
-      ['Network headers', integer(core.headers), 'Raptoreum mainnet'],
       ['Asset index', integer(index.indexed_height), index.ready ? 'Indexed and ready' : 'Waiting for synchronization'],
       ['Network status', status.ready ? 'Connected' : status.phase==='core_unavailable' ? 'Unavailable' : 'Syncing', status.core_stale ? 'Last known Core data' : 'Progress updates automatically']
     ].map(([label,value,note]) => `<div class="stat"><div class="stat-label">${label}</div><div class="stat-value">${value}</div><div class="stat-note">${note}</div></div>`).join('')}</div>`;
   }
 
   function syncView() {
-    const core = currentStatus?.core || {};
-    return stats(currentStatus || {}) + heading('Network synchronization', 'The explorer is installed and waiting for complete mainnet data.') + `<div class="card status-card"><div><h3>Raptoreum Core</h3><div class="status-line"><span>Network</span><strong>Mainnet</strong></div><div class="status-line"><span>Processed blocks</span><strong>${integer(core.blocks)}</strong></div><div class="status-line"><span>Received headers</span><strong>${integer(core.headers)}</strong></div><div class="status-line"><span>Verification progress</span><strong>${e(progressLabel(core))}${currentStatus?.core_stale ? ' (last known)' : ''}</strong></div></div><div><h3>Your explorer is ready to connect</h3><p class="muted">Explore blocks, transactions, addresses, assets and holders once synchronization finishes. This page refreshes automatically.</p><a class="button" href="#/api">View the API reference ↗</a></div></div>`;
+    return stats(currentStatus || {}) + heading('Network synchronization','Core verifies mainnet first. The asset index starts automatically afterward.');
   }
 
   async function overview() {
@@ -173,6 +211,7 @@ if (typeof document !== 'undefined') {
     const endpoints = [
       ['status','Synchronization, indexed tip and readiness. Available during sync.'],
       ['health','Process health without calling Core; does not indicate chain readiness.'],
+      ['resources','Cached whole-VPS CPU, RAM, swap and root-filesystem usage; sampled once per minute without Core calls.'],
       ['overview?limit=5','Shared public block/transaction snapshot, at most 10 entries.'],
       ['network','Mining, mempool and smartnode count; null if a metric is unavailable.'],
       ['smartnodes?limit=25&offset=0','Paginated public smartnode list, with snapshot time.'],
@@ -224,6 +263,7 @@ if (typeof document !== 'undefined') {
     try {
       let html;
       if (parts[0] === 'api') html = apiPage();
+      else if (parts[0] === 'node') html = await nodePage();
       else if (!currentStatus?.ready) html = syncView();
       else if (!parts.length) html = await overview();
       else if (parts[0] === 'blocks') html = await blocksPage(params,path);
@@ -244,7 +284,10 @@ if (typeof document !== 'undefined') {
       else if (parts[0] === 'asset' && parts[1]) html = await assetPage(parts[1],params,path);
       else throw new Error('This explorer page does not exist.');
       if (turn === generation) {
+        renderFailed = false;
         $('view').innerHTML = html;
+        updateResourceSummary();
+        document.querySelectorAll('nav details').forEach(menu=>{menu.open=false});
         document.querySelectorAll('nav a').forEach(a=>{
           const active=(a.hash==='#/' && !parts.length) || (a.hash!=='#/' && a.hash==='#/'+parts[0]);
           a.classList.toggle('active',active);
@@ -252,7 +295,10 @@ if (typeof document !== 'undefined') {
         });
       }
     } catch (error) {
-      if (turn === generation) $('view').innerHTML = `<div class="card error-card"><h2>Data unavailable</h2><p>${e(error.message)}</p><a class="button" href="#/">Back to overview</a></div>`;
+      if (turn === generation) {
+        renderFailed = true;
+        $('view').innerHTML = `<div class="card error-card"><h2>Data unavailable</h2><p>${e(error.message)}</p><a class="button" href="#/">Back to overview</a></div>`;
+      }
     }
   }
 
@@ -261,11 +307,17 @@ if (typeof document !== 'undefined') {
     if (refreshing || document.hidden) return;
     refreshing = true;
     const wasReady = currentStatus?.ready;
+    const previousTip = currentStatus?.core?.bestblockhash;
     try {
       updateStatus(await api('status'));
+      if(document.hidden) return;
+      if(!location.hash || location.hash==='#/' || location.hash.startsWith('#/node')) await loadResources();
+      if(document.hidden) return;
+      updateResourceSummary();
       failures=currentStatus.phase==='core_unavailable' ? failures+1 : 0;
-      const dynamic=/^#\/(?:blocks|transactions|network|smartnodes)(?:\?|$)/.test(location.hash);
-      if (manual || dynamic || wasReady !== currentStatus.ready || !currentStatus.ready || !location.hash || location.hash === '#/') await render();
+      const dynamic=/^#\/(?:node|network|smartnodes)(?:\?|$)/.test(location.hash);
+      const latest=(!location.hash || location.hash==='#/' || /^#\/(?:blocks|transactions)(?:\?|$)/.test(location.hash)) && previousTip!==currentStatus.core?.bestblockhash;
+      if (manual || renderFailed || dynamic || latest || wasReady !== currentStatus.ready || !currentStatus.ready) await render();
     } catch (error) {
       failures++;
       updateStatus({...currentStatus,ready:false, phase:'core_unavailable',core_stale:!!currentStatus?.core});
@@ -295,7 +347,10 @@ if (typeof document !== 'undefined') {
     try { localStorage.setItem('rtm-theme',document.body.classList.contains('dark') ? 'dark' : 'light'); } catch {}
   });
   try { document.body.classList.toggle('dark',localStorage.getItem('rtm-theme')==='dark'); } catch {}
-  window.addEventListener('hashchange',render);
+  window.addEventListener('hashchange',async()=>{
+    if(!location.hash || location.hash==='#/' || location.hash.startsWith('#/node')) await loadResources();
+    await render();
+  });
   document.addEventListener('visibilitychange',()=>{
     clearTimeout(pollTimer);
     if(!document.hidden) refreshStatus();
@@ -315,5 +370,6 @@ if (typeof document !== 'undefined') {
       button.textContent='Copied';
     } catch { button.textContent='Select text to copy'; }
   });
+  if(location.hash.startsWith('#/node')) render();
   refreshStatus();
 }

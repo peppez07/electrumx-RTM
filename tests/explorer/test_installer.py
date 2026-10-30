@@ -119,3 +119,26 @@ def test_health_probe_only_accepts_our_service(monkeypatch):
     with pytest.raises(RuntimeError):module.wait_for_health(8080,attempts=1)
     monkeypatch.setattr(Reply,'read',lambda *a:b'{"service":"electrumx-rtm-explorer","version":1}')
     module.wait_for_health(8080,attempts=1)
+
+def test_staging_enables_shared_host_metrics_and_read_only_container_mount(tmp_path):
+    module,options=installer(),args(tmp_path)
+    module.stage_files(options)
+    assert 'EXPLORER_METRICS_FILE=/var/lib/rtm-explorer/metrics/host.json' in (Path(options.config_dir)/'explorer.env').read_text()
+    options.image='rtm:test'
+    text=module.service_text(options,123,456)
+    assert '/var/lib/rtm-explorer/metrics:/var/lib/rtm-explorer/metrics:ro' in text
+    assert '/var/run/docker.sock' not in text and '/proc:' not in text
+
+
+def test_metrics_sampler_units_are_bounded_idempotent_and_do_not_contact_core(tmp_path):
+    module=installer();directory=tmp_path/'metrics';runtime=tmp_path/'runtime';units=tmp_path/'units'
+    module.stage_metrics(directory,runtime,units)
+    module.stage_metrics(directory,runtime,units)
+    service=(units/'rtm-explorer-metrics.service').read_text()
+    timer=(units/'rtm-explorer-metrics.timer').read_text()
+    assert 'User=rtm-explorer' in service and 'Nice=19' in service
+    assert 'MemoryMax=48M' in service and 'CPUQuota=5%' in service
+    assert 'OnUnitActiveSec=60' in timer and 'rtm-core' not in service
+    assert (runtime/'host_metrics.py').is_file()
+    (units/'rtm-explorer-metrics.service').write_text('[Unit]\nDescription=Other service\n')
+    with pytest.raises(ValueError):module.stage_metrics(directory,runtime,units)

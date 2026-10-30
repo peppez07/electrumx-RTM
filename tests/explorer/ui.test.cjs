@@ -19,6 +19,11 @@ const {progressLabel, refreshDelay} = require('../../electrumx/explorer/static/a
 assert.equal(progressLabel({}), 'Unavailable');
 assert.equal(progressLabel({verificationprogress:0}), '0.000%');
 assert.equal(progressLabel({verificationprogress:0.327498}), '32.750%');
-assert.equal(refreshDelay(0), 30000);
-assert.equal(refreshDelay(4), 120000);
+assert.equal(refreshDelay(0), 60000);
+assert.equal(refreshDelay(4), 240000);
 assert.equal(progressLabel({verificationprogress:'0.327498'}), '32.750%');
+
+const {formatBytes} = require("../../electrumx/explorer/static/app.js");
+assert.equal(formatBytes(1024), "1 KiB");
+assert.equal(formatBytes(0), "0 B");
+assert.equal(formatBytes(null), "Unavailable");

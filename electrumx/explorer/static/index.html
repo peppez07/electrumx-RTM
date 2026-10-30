@@ -14,14 +14,14 @@
   <div class="network-strip"><div class="container"><span><i class="dot"></i> Raptoreum Mainnet</span><span id="strip-status">Connecting to the network…</span></div></div>
   <header class="container header">
     <a class="brand" href="#/"><img class="brand-mark" src="/static/raptoreum-logo.png" alt="Raptoreum" width="44" height="44"><span>raptoreum<span class="brand-sub">BLOCKCHAIN EXPLORER</span></span></a>
-    <nav aria-label="Main navigation"><a href="#/">Overview</a><a href="#/blocks">Blocks</a><a href="#/transactions">Transactions</a><a href="#/assets">Assets</a><a href="#/smartnodes">Smartnodes</a><a href="#/network">Network</a><a href="#/api">API</a><button id="theme" class="icon-button" aria-label="Toggle dark mode">◐</button></nav>
+    <nav aria-label="Main navigation"><a href="#/">Overview</a><a href="#/blocks">Blocks</a><a href="#/assets">Assets</a><a href="#/node">Node</a><a href="#/api">API</a><details class="more-menu"><summary>More</summary><div><a href="#/transactions">Transactions</a><a href="#/smartnodes">Smartnodes</a><a href="#/network">Network</a></div></details><button id="theme" class="icon-button" aria-label="Toggle dark mode">◐</button></nav>
   </header>
-  <section class="hero"><div class="container"><div class="eyebrow">THE RAPTOREUM BLOCKCHAIN EXPLORER</div><h1>Every block. Every asset.</h1><p>A clear view of the Raptoreum network.</p>
+  <section class="hero"><div class="container">
     <form id="search" role="search"><label class="sr-only" for="query">Search the blockchain</label><span class="search-label">Blockchain search</span><input id="query" name="query" placeholder="Search address, transaction, block or asset" autocomplete="off" required maxlength="128"><button type="submit" aria-label="Search">Search <span>↗</span></button></form>
-    <div class="hero-foot"><span class="live-indicator"></span> Mainnet data · Powered by ElectrumX &amp; Raptoreum Core</div>
   </div></section>
   <main class="container" id="main" tabindex="-1">
     <div class="refresh-bar"><span id="refresh-info">Connecting…</span><button id="refresh" class="button">Refresh</button></div>
+    <section id="resource-summary" aria-label="VPS resource usage"></section>
     <div id="sync-banner" role="status" aria-live="polite"></div>
     <div id="view" aria-live="polite"><div class="loading card">Connecting to Raptoreum…</div></div>
   </main>
