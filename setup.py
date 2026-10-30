@@ -28,7 +28,7 @@ setuptools.setup(
         'cpupower': ['cpupower'],
     },
     packages=setuptools.find_packages(include=('electrumx*',)),
-    package_data={'electrumx.explorer': ['static/*.html', 'static/*.css', 'static/*.js']},
+    package_data={'electrumx.explorer': ['static/*.html', 'static/*.css', 'static/*.js', 'static/*.png']},
     description='ElectrumX Server',
     author='Electrum developers',
     author_email='electrumdev@gmail.com',

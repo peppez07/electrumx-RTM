@@ -120,6 +120,9 @@ settings and a loopback ``rpcconnect``; config includes are rejected. The explor
 uses explicit allowlisted methods and never exposes a general RPC proxy. HTTP
 transaction relay is disabled unless explicitly enabled as described below.
 
+The explorer logo is the official Raptoreum mark used on https://raptoreum.com/,
+bundled locally without a third-party image request.
+
 The UI uses bundled HTML, CSS and JavaScript without a frontend framework,
 external fonts or a separate statistics database. Hidden tabs pause polling;
 visible pages refresh status every 30 seconds with failure backoff. Dashboard,
