@@ -319,3 +319,34 @@ async def test_future_capability_tracks_connected_index_support(explorer):
     electrum.features['rtm_assets']['future_outputs_selectable']=True
     updated=await (await client.get('/api/v1/wallet/capabilities')).json()
     assert updated['future_outputs_selectable'] is True
+
+
+
+@pytest.mark.asyncio
+async def test_initial_index_build_reports_progress(explorer):
+    client, _, electrum = explorer
+    from electrumx.explorer.clients import BackendError
+    async def closed(*args):
+        raise BackendError()
+    async def progress():
+        return {'indexed_height': 25, 'daemon_height': 101}
+    electrum.call, electrum.index_progress = closed, progress
+    status = await (await client.get('/api/v1/status')).json()
+    assert status['phase'] == 'index_syncing' and not status['ready']
+    assert status['electrumx'] == {'ready': False, 'initial_sync': True, 'indexed_height': 25,
+                                   'target_height': 100, 'percent': 25.0}
+    response = await client.get('/api/v1/addresses/'+ADDRESS)
+    body = await response.json()
+    assert response.status == 503 and body['error']['code'] == 'synchronizing'
+    assert '25 of 100 blocks (25.0%)' in body['error']['message']
+
+
+@pytest.mark.asyncio
+async def test_unreachable_index_without_progress_stays_unavailable(explorer):
+    client, _, electrum = explorer
+    from electrumx.explorer.clients import BackendError
+    async def closed(*args):
+        raise BackendError()
+    electrum.call = closed
+    status = await (await client.get('/api/v1/status')).json()
+    assert status['phase'] == 'index_unavailable' and status['electrumx'] == {'ready': False}

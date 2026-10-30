@@ -83,11 +83,34 @@ class CoreClient:
 
 class ElectrumClient:
     '''One persistent connection preserves the server's connection-bound cursors.'''
-    def __init__(self, host='127.0.0.1', port=50001):
-        self.host, self.port = host, port
+    def __init__(self, host='127.0.0.1', port=50001, admin_port=None):
+        self.host, self.port, self.admin_port = host, port, admin_port
         self.reader = self.writer = None
         self.lock = asyncio.Lock()
         self.serial = 0
+
+    async def index_progress(self):
+        '''Initial-sync progress from the local admin RPC, which ElectrumX serves before
+        its client ports open. Only `getinfo` is ever sent; returns None if unavailable.'''
+        if not self.admin_port:
+            return None
+        writer = None
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(self.host, self.admin_port, limit=1024*1024), 5)
+            writer.write(json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': 'getinfo',
+                                     'params': []}).encode()+b'\n')
+            await writer.drain()
+            info = rpc_result(json.loads(await asyncio.wait_for(reader.readline(), 5)))
+            db_height, daemon_height = info['db height'], info['daemon height']
+            if type(db_height) is not int or type(daemon_height) is not int:
+                return None
+            return {'indexed_height': db_height, 'daemon_height': daemon_height}
+        except (OSError, asyncio.TimeoutError, ValueError, KeyError, TypeError, BackendError):
+            return None
+        finally:
+            if writer:
+                writer.close()
 
     async def call(self, method, params=None):
         if method not in ELECTRUM_METHODS:

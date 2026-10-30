@@ -18,10 +18,14 @@ def main():
         electrum_host = os.environ.get('EXPLORER_ELECTRUM_HOST', '127.0.0.1')
         if electrum_host not in ('127.0.0.1', 'localhost', '::1'):
             raise ValueError()
+        # ElectrumX admin RPC (install_stack default 8001); 0 disables sync-progress reporting.
+        admin_port = int(os.environ.get('EXPLORER_ELECTRUM_RPC_PORT', '8001'))
+        if not 0 <= admin_port <= 65535:
+            raise ValueError()
     except (KeyError, ValueError, OSError):
         print('Explorer configuration invalid. Set EXPLORER_CORE_CONFIG to a readable mainnet RPC config and valid local ports.', file=sys.stderr)
         return 2
-    app = create_app(CoreClient(**config), ElectrumClient(electrum_host, electrum_port),
+    app = create_app(CoreClient(**config), ElectrumClient(electrum_host, electrum_port, admin_port or None),
                      enable_wallet_api=os.environ.get('EXPLORER_WALLET_API', '0') == '1',
                      metrics_file=os.environ.get('EXPLORER_METRICS_FILE'))
     web.run_app(app, host=os.environ.get('EXPLORER_HOST', '0.0.0.0'), port=port,

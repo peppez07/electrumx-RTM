@@ -126,7 +126,15 @@ class Explorer:
                     result['phase'] = 'core_syncing'
                 else:
                     result['phase'] = 'index_unavailable'
-                    features = await self.electrum.call('server.features')
+                    try:
+                        features = await self.electrum.call('server.features')
+                    except BackendError:
+                        # Client ports stay closed during the initial index build.
+                        progress = await self.index_progress(info.get('blocks'))
+                        if progress:
+                            result['electrumx'] = progress
+                            result['phase'] = 'index_syncing'
+                        raise
                     assets = features.get('rtm_assets', {})
                     result['electrumx'] = assets
                     result['ready'] = bool(assets.get('ready') is True and
@@ -138,10 +146,25 @@ class Explorer:
             self.cached_status, self.checked = result, time.monotonic()
             return result
 
+    async def index_progress(self, core_height):
+        progress_source = getattr(self.electrum, 'index_progress', None)
+        progress = await progress_source() if progress_source else None
+        if not progress:
+            return None
+        target = core_height if type(core_height) is int and core_height > 0 else progress['daemon_height']
+        return {'ready': False, 'initial_sync': True, 'indexed_height': progress['indexed_height'],
+                'target_height': target,
+                'percent': round(100*progress['indexed_height']/target, 2) if target else 0}
+
     async def gate(self, fresh=False):
         status = await self.status(fresh=fresh)
         if not status['ready']:
-            raise APIError(503, 'synchronizing', 'Chain data is unavailable until Core and the asset index synchronize.')
+            message = 'Chain data is unavailable until Core and the asset index synchronize.'
+            index = status.get('electrumx') or {}
+            if index.get('initial_sync'):
+                message += ' ElectrumX has indexed {:,} of {:,} blocks ({}%).'.format(
+                    index['indexed_height'], index['target_height'], index['percent'])
+            raise APIError(503, 'synchronizing', message)
         return status
 
     async def block(self, identifier):

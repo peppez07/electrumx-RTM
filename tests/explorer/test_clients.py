@@ -82,3 +82,26 @@ async def test_asset_pages_reuse_connection_for_cursors_and_recover_after_discon
         await client.close()
         server.close()
         await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_index_progress_sends_only_getinfo_to_admin_rpc():
+    received = []
+    async def handle(reader, writer):
+        request = json.loads(await reader.readline())
+        received.append(request['method'])
+        writer.write(json.dumps({'jsonrpc': '2.0', 'id': request['id'], 'result': {
+            'db height': 220475, 'daemon height': 1461946, 'sessions': {}}}).encode()+b'\n')
+        await writer.drain()
+        writer.close()
+    server = await asyncio.start_server(handle, '127.0.0.1', 0)
+    port = server.sockets[0].getsockname()[1]
+    try:
+        client = ElectrumClient('127.0.0.1', 1, admin_port=port)
+        assert await client.index_progress() == {'indexed_height': 220475, 'daemon_height': 1461946}
+        assert received == ['getinfo']
+        assert await ElectrumClient('127.0.0.1', 1).index_progress() is None
+    finally:
+        server.close()
+        await server.wait_closed()
+    assert await ElectrumClient('127.0.0.1', 1, admin_port=port).index_progress() is None
