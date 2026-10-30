@@ -13,7 +13,8 @@ from aiorpcx import RPCError, run_in_thread
 from electrumx.lib.raptoreum_assets import valid_asset_id
 from electrumx.lib.raptoreum_future import future_spendability
 from electrumx.server.raptoreum_db import AssetIndexError, encode
-from electrumx.server.session import DashElectrumX, BAD_REQUEST, scripthash_to_hashX
+from electrumx.server.session import (DashElectrumX, BAD_REQUEST, assert_tx_hash,
+                                     non_negative_integer, scripthash_to_hashX)
 
 RETRY = -32001
 
@@ -45,6 +46,7 @@ class RaptoreumElectrumX(DashElectrumX):
             'blockchain.scripthash.assets.get_history': self.assets_get_history,
             'blockchain.scripthash.assets.subscribe': self.assets_subscribe,
             'blockchain.scripthash.assets.unsubscribe': self.assets_unsubscribe,
+            'blockchain.transaction.get_in_block': self.transaction_get_in_block,
         })
 
     async def server_features_async(self):
@@ -59,7 +61,22 @@ class RaptoreumElectrumX(DashElectrumX):
             'methods': sorted(k for k in self.request_handlers
                               if '.assets.' in k or k == 'blockchain.asset.get_metadata'),
         }
+        result['rtm_extensions'] = ['blockchain.transaction.get_in_block']
         return result
+
+    async def transaction_get_in_block(self, tx_hash, height):
+        '''Raw confirmed transaction read from the block at `height`.
+
+        Unlike blockchain.transaction.get this needs no Core -txindex, so the
+        server can run beside unmodified nodes. Clients know heights from
+        blockchain.scripthash.get_history.'''
+        assert_tx_hash(tx_hash)
+        height = non_negative_integer(height)
+        if height > self.db.db_height:
+            raise RPCError(BAD_REQUEST, f'height {height:,d} is not indexed')
+        self.bump_cost(1.0)
+        block_hash = (await self.daemon_request('block_hex_hashes', height, 1))[0]
+        return await self.daemon_request('getrawtransaction', tx_hash, False, block_hash)
 
     def sub_count(self):
         return super().sub_count() + len(self.asset_subs)

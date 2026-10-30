@@ -66,8 +66,9 @@ against the release's ``checksums.txt``. Use mainnet release assets; do not
 substitute a testnet build. Existing working mainnet nodes do not need to be
 reinstalled for this ElectrumX setup.
 
-Core must run with transaction and asset indexes enabled and pruning disabled.
-The following shows the required settings in its actual ``raptoreum.conf``::
+Core must be an unpruned mainnet node. The complete stack with the explorer
+also needs Core's transaction and asset indexes. The following shows the
+settings in its actual ``raptoreum.conf``::
 
     chain=main
     testnet=0
@@ -90,9 +91,20 @@ cookie-only authentication and ``includeconf`` are not supported. Keep RPC bound
 to loopback. No wallet keys or seed phrases belong in the ElectrumX setup.
 
 For an existing Core node, check its current configuration before changing it.
-Enabling missing indexes can require a controlled Core restart and rebuild;
-complete that using Core's procedures. The ElectrumX installer cannot rebuild
-missing Core indexes. Do not delete an existing Core data directory.
+Enabling missing indexes requires a Core restart with a full reindex, which can
+take hours; on a smartnode that downtime risks PoSe penalties. The ElectrumX
+installer cannot rebuild missing Core indexes. Do not delete an existing Core
+data directory.
+
+**ElectrumX without the explorer needs neither index**, so it can run beside an
+unmodified node, including a smartnode, with no Core restart. ElectrumX builds
+its own coin and asset index from raw blocks, and the Raptoreum extension
+``blockchain.transaction.get_in_block(tx_hash, height)`` returns confirmed
+transactions by reading their block. Without ``txindex``, the standard
+``blockchain.transaction.get`` only finds mempool transactions; MetaYoshi uses
+the extension. Install without ``--with-explorer`` in that case. Plan for the
+extra RAM, disk and initial-sync CPU on a smartnode; the installer's resource
+caps keep Core prioritized.
 
 Use your installed ``raptoreum-cli`` with the same config and data-directory
 arguments used by your Core service to inspect ``getblockchaininfo``. Core must
@@ -655,7 +667,8 @@ Core and server configuration
 
 The implementation targets Raptoreum Core ``2.0.3.01-mainnet`` and has been tested
 with Python 3.10 and LevelDB on Linux. Use a mainnet Core full node with
-``server=1``, ``txindex=1``, ``assetindex=1``, and ``prune=0``. Keep Core RPC
+``server=1`` and ``prune=0``; the explorer additionally needs ``txindex=1`` and
+``assetindex=1`` (see the installation guide). Keep Core RPC
 restricted to localhost or a private network.
 
 Example ElectrumX environment::

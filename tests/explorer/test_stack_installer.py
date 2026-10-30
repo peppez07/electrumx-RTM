@@ -49,7 +49,7 @@ def test_auto_profile_uses_available_ram():
 @pytest.mark.parametrize('replacement',[('chain=main','chain=test'),
     ('assetindex=1','assetindex=0'),('txindex=1','txindex=0'),('prune=0','prune=550')])
 def test_bad_core_settings_fail_without_changing_source_or_staging(tmp_path,replacement):
-    installer=module(); args=options(tmp_path)
+    installer=module(); args=options(tmp_path,'--with-explorer')
     source=Path(args.core_config)
     source.write_text(source.read_text().replace(*replacement))
     original=source.read_bytes()
@@ -166,4 +166,24 @@ def test_wss_cannot_take_core_rpc_port(tmp_path,preserved):
         args.tls_cert='certificate.pem';args.tls_key='key.pem'
     args.wss_port=10225
     with pytest.raises(ValueError,match='Core RPC'):
+        installer.stage(args,123,456)
+
+
+@pytest.mark.parametrize('replacement',[('assetindex=1','assetindex=0'),('txindex=1','txindex=0')])
+def test_electrumx_alone_runs_beside_an_unmodified_node(tmp_path,replacement):
+    installer=module(); args=options(tmp_path)
+    source=Path(args.core_config)
+    source.write_text(source.read_text().replace(*replacement))
+    original=source.read_bytes()
+    result=installer.stage(args,123,456)
+    assert source.read_bytes() == original
+    assert result['core_txindex'] is (replacement[0] != 'txindex=1')
+
+
+@pytest.mark.parametrize('replacement',[('chain=main','chain=test'),('prune=0','prune=550')])
+def test_electrumx_alone_still_requires_unpruned_mainnet(tmp_path,replacement):
+    installer=module(); args=options(tmp_path)
+    source=Path(args.core_config)
+    source.write_text(source.read_text().replace(*replacement))
+    with pytest.raises(ValueError):
         installer.stage(args,123,456)

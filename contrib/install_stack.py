@@ -141,8 +141,13 @@ def stage(args,uid,gid):
     validate(args)
     core=config_module.load_core_config(args.core_config)
     settings=config_module.read_core_settings(args.core_config)
-    if any(settings.get(key,'0').lower() not in ('1','true') for key in ('txindex','assetindex')):
-        raise ValueError('Core requires txindex=1 and assetindex=1; configure/reindex Core explicitly before installing.')
+    enabled=lambda key:settings.get(key,'0').lower() in ('1','true')
+    # ElectrumX indexes assets itself from raw blocks and serves confirmed
+    # transactions through blockchain.transaction.get_in_block, so it runs beside
+    # an unmodified node (for example a smartnode). The explorer reads Core's
+    # transaction and asset indexes directly and still needs both.
+    if args.with_explorer and not (enabled('txindex') and enabled('assetindex')):
+        raise ValueError('The explorer requires Core txindex=1 and assetindex=1; configure/reindex Core explicitly or install without --with-explorer.')
     if settings.get('prune','0').lower() not in ('0','false'):
         raise ValueError('Core must be unpruned (prune=0).')
     if urlsplit(core['url']).port in (args.tcp_port,args.ws_port,args.rpc_port,args.port if args.with_explorer else 0):
@@ -211,6 +216,9 @@ def stage(args,uid,gid):
         '\n[Install]\nWantedBy=timers.target\n')
     result=summary(args)
     result['wss_port']=args.wss_port if tls_cert else None
+    # Without txindex, standard blockchain.transaction.get serves only mempool
+    # transactions; MetaYoshi uses blockchain.transaction.get_in_block instead.
+    result['core_txindex']=enabled('txindex')
     manifest.write_text(json.dumps(result,indent=2)+'\n');manifest.chmod(0o640)
     return result
 

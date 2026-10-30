@@ -165,3 +165,26 @@ async def test_features_reports_assets_not_ready_during_core_sync():
     s.mempool.asset_ready = False
     result = await s.handle_request(Request('server.features', []))
     assert result['rtm_assets']['ready'] is False
+
+
+@pytest.mark.asyncio
+async def test_transaction_get_in_block_reads_the_block_without_txindex():
+    s = routed_session()
+    calls = []
+
+    async def daemon(method, *args):
+        calls.append((method, args))
+        if method == 'block_hex_hashes':
+            assert args == (80, 1)
+            return ['bb'*32]
+        assert method == 'getrawtransaction'
+        return '01000000000000000000'
+    s.daemon_request = daemon
+    result = await s.handle_request(Request('blockchain.transaction.get_in_block', ['dd'*32, 80]))
+    assert result == '01000000000000000000'
+    assert calls[-1] == ('getrawtransaction', ('dd'*32, False, 'bb'*32))
+    features = await s.handle_request(Request('server.features', []))
+    assert features['rtm_extensions'] == ['blockchain.transaction.get_in_block']
+    for bad in (['dd'*32, 101], ['xyz', 80], ['dd'*32, -1]):
+        with pytest.raises(RPCError):
+            await s.handle_request(Request('blockchain.transaction.get_in_block', bad))

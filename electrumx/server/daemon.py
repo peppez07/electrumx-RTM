@@ -277,11 +277,13 @@ class Daemon:
         network_info = await self.getnetworkinfo()
         return network_info['relayfee']
 
-    async def getrawtransaction(self, hex_hash, verbose=False):
-        '''Return the serialized raw transaction with the given hash.'''
+    async def getrawtransaction(self, hex_hash, verbose=False, block_hash=None):
+        '''Return the serialized raw transaction with the given hash.
+
+        With block_hash the daemon reads that block, so no -txindex is needed.'''
         # Cast to int because some coin daemons are old and require it
-        return await self._send_single('getrawtransaction',
-                                       (hex_hash, int(verbose)))
+        params = (hex_hash, int(verbose)) + ((block_hash,) if block_hash else ())
+        return await self._send_single('getrawtransaction', params)
 
     async def getrawtransactions(self, hex_hashes, replace_errs=True):
         '''Return the serialized raw transactions with the given hashes.
