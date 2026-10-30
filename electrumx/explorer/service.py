@@ -159,7 +159,8 @@ class Explorer:
         target = core_height if type(core_height) is int and core_height > 0 else progress['daemon_height']
         return {'ready': False, 'initial_sync': True, 'indexed_height': progress['indexed_height'],
                 'target_height': target,
-                'percent': round(100*progress['indexed_height']/target, 2) if target else 0}
+                # A fresh index reports height -1 before its genesis block.
+                'percent': round(100*max(progress['indexed_height'], 0)/target, 2) if target else 0}
 
     async def gate(self, fresh=False, index=False):
         '''Core-backed routes need only a synchronized Core. Routes that read the

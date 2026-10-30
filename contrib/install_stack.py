@@ -299,7 +299,10 @@ def main(argv=None):
         'assert (Path(e.__file__).parent/"static/index.html").is_file()')
     command=(['docker','run','--rm','--network','none',args.image,'python','-I','-c',smoke]
              if args.image else [str(Path(args.venv)/'bin/python'),'-I','-c',smoke])
-    subprocess.run(command,check=True)
+    try:subprocess.run(command,check=True)
+    except (OSError,subprocess.CalledProcessError):
+        p.error('This checkout is not installed in the selected '+('Docker image; build it first.' if args.image else
+                'virtual environment; use contrib/install_electrumx.sh --setup.'))
     import pwd
     try:user=pwd.getpwnam('rtm-electrumx')
     except KeyError:
