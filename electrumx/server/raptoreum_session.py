@@ -1,6 +1,7 @@
 '''Additive RTM asset extension; existing coin responses retain native units.'''
 
 import base64
+import asyncio
 import binascii
 import hashlib
 import json
@@ -10,6 +11,7 @@ import secrets
 from aiorpcx import RPCError, run_in_thread
 
 from electrumx.lib.raptoreum_assets import valid_asset_id
+from electrumx.lib.raptoreum_future import future_spendability
 from electrumx.server.raptoreum_db import AssetIndexError, encode
 from electrumx.server.session import DashElectrumX, BAD_REQUEST, scripthash_to_hashX
 
@@ -52,7 +54,8 @@ class RaptoreumElectrumX(DashElectrumX):
             'indexed_height': self.db.db_height,
             'indexed_tip': self.db.db_tip[::-1].hex(),
             'amount_encoding': 'atomic_decimal_string',
-            'asset_destinations': ['p2pkh'], 'future_outputs_selectable': False,
+            'asset_destinations': ['p2pkh'], 'future_outputs_selectable': True,
+            'future_maturity': 'next_block_height_or_core_adjusted_time',
             'methods': sorted(k for k in self.request_handlers
                               if '.assets.' in k or k == 'blockchain.asset.get_metadata'),
         }
@@ -241,7 +244,27 @@ class RaptoreumElectrumX(DashElectrumX):
             items += pending[offset:offset+room]
             if len(pending) > offset+room:
                 next_position = {'phase': 'pending', 'after': offset+room}
-        return self._page([public_record(o) for o in items], next_position, view, query)
+        context = None
+        if mode == 'outputs':
+            if any(o.get('future') is not None and o.get('height', 0) > 0 for o in items):
+                try:
+                    context = await asyncio.wait_for(self.daemon_request('future_spend_context'), 10)
+                except Exception as error:
+                    raise RPCError(RETRY, 'future maturity context unavailable; retry') from error
+                if (not isinstance(context, dict) or
+                        (context.get('height'), context.get('tip')) != (view['height'], view['tip']) or
+                        type(context.get('adjusted_time')) is not int or context['adjusted_time'] < 0 or
+                        (self.db.db_height, self.db.db_tip[::-1].hex()) != (view['height'], view['tip']) or
+                        self.mempool.asset_tip != (view['height'], view['tip']) or
+                        self.mempool.asset_generation != view['generation'] or not self.mempool.asset_ready):
+                    raise RPCError(RETRY, 'chain or mempool changed during future maturity check; retry')
+            items = [future_spendability(o, view['height'], context['adjusted_time'] if context else None)
+                     for o in items]
+        result = self._page([public_record(o) for o in items], next_position, view, query)
+        if context is not None:
+            result['spendability_context'] = dict(context, spend_height=context['height']+1,
+                time_source='core_offset_and_synchronized_host_clock')
+        return result
 
     async def asset_status(self, hashX):
         view = await self._view(hashX)

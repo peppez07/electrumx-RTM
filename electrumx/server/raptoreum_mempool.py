@@ -54,16 +54,18 @@ class RaptoreumMemPool(MemPool):
 
         for tx_hash, item in self.txs.items():
             tx = item.asset_tx
+            fields = decode_asset_payload(tx)
             height = -int(any(p[0] in self.txs for p in item.prevouts))
             for pos, txout in enumerate(tx.outputs):
                 transfer = parse_asset_script(txout.pk_script)
                 if transfer:
                     if txout.value != 0:
                         raise AssetParseError('asset output has nonzero native value')
-                    record = transfer_record(transfer, tx_hash, pos, height, -1, tx.tx_type)
+                    record = transfer_record(transfer, tx_hash, pos, height, -1, tx.tx_type,
+                        {'maturity':fields['maturity'], 'lock_time':fields['lock_time']}
+                        if tx.tx_type == 7 and pos == fields['lock_output_index'] else None)
                     outputs[tx_hash, pos] = record
                     event(record, record['amount'], record['tx_hash'], height, 'receive')
-            fields = decode_asset_payload(tx)
             if fields and tx.tx_type in (8, 9, 10):
                 aid = hash_to_hex_str(tx_hash) if tx.tx_type == 8 else fields['asset_id']
                 metadata.append({'asset_id': aid, 'tx_hash': hash_to_hex_str(tx_hash),

@@ -36,6 +36,7 @@ class WalletAPI:
         return json_response({'version':1, 'network':'mainnet', 'ready':status['ready'],
             'signing':'client_only', 'transaction_building':'client_only',
             'asset_types':['root', 'subasset', 'unique'], 'asset_destinations':['p2pkh'],
+            'future_outputs_selectable':status['electrumx'].get('future_outputs_selectable') is True,
             'amount_encoding':'atomic_decimal_string', 'atomic_scale':'100000000',
             'broadcast_enabled':self.enabled, 'decode_enabled':self.enabled,
             'acceptance_preflight':False, 'max_raw_transaction_bytes':MAX_RAW_BYTES,

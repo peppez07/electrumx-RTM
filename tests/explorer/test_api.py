@@ -293,3 +293,29 @@ async def test_static_health_endpoint_requires_no_core_calls(explorer):
     result=await (await client.get('/api/v1/health')).json()
     assert result == {'service':'electrumx-rtm-explorer','version':1}
     assert core.calls == [] and electrum.calls == []
+
+@pytest.mark.asyncio
+async def test_http_utxos_preserve_future_eligibility_and_core_context(explorer):
+    from tests.explorer.test_api import ADDRESS,ASSET
+    client,_,electrum=explorer
+    previous=electrum.call
+    async def call(method,params=None):
+        if method=='blockchain.scripthash.assets.listunspent':
+            return {'items':[{'asset_id':ASSET,'amount':'100000000','spendable':False,
+                'spendable_reason':'future_locked','future':{'maturity':5,'lock_time':-1,'confirmed_time':1000}}],
+                'cursor':None,'spendability_context':{'height':100,'tip':'ab'*32,'adjusted_time':1000,'spend_height':101}}
+        return await previous(method,params)
+    electrum.call=call
+    data=await (await client.get('/api/v1/addresses/'+ADDRESS+'/assets/'+ASSET+'/utxos')).json()
+    assert data['items'][0]['spendable'] is False
+    assert data['items'][0]['future']['maturity']==5
+    assert data['spendability_context']['spend_height']==101
+
+@pytest.mark.asyncio
+async def test_future_capability_tracks_connected_index_support(explorer):
+    client,_,electrum=explorer
+    first=await (await client.get('/api/v1/wallet/capabilities')).json()
+    assert first['future_outputs_selectable'] is False
+    electrum.features['rtm_assets']['future_outputs_selectable']=True
+    updated=await (await client.get('/api/v1/wallet/capabilities')).json()
+    assert updated['future_outputs_selectable'] is True

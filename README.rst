@@ -594,7 +594,9 @@ Asset RPC extension
 ===================
 
 ``server.features`` advertises the ``rtm_assets`` extension, version 1, its
-supported methods, indexed height and tip, and readiness state.
+supported methods, indexed height and tip, readiness state, and
+``future_outputs_selectable`` support. The HTTP capability route reflects the
+connected index's future-output support.
 
 The extension adds:
 
@@ -712,9 +714,78 @@ construction, coin/asset change handling, root-owner authorization and signing
 belong in the compatible wallet client; this repository contains no extension
 wallet or private-key store.
 
-Supported asset destinations are P2PKH. Future-transaction asset outputs and
-noncanonical or unsupported unique ranges remain visible but are marked
-``spendable: false``.
+Supported asset destinations are P2PKH. Canonical asset outputs from future
+transactions are evaluated individually: only the designated locked output
+waits for maturity; other outputs retain their normal eligibility. Noncanonical
+scripts and unsupported unique ranges remain visible with ``spendable: false``.
+
+Future asset output maturity
+----------------------------
+
+Asset ``listunspent`` and its HTTP alias report dynamic ``spendable`` and
+``spendable_reason`` fields. For the designated future output, the rule follows
+Core 2.0.3.01's actual ``validateFutureCoin`` implementation:
+
+* The block condition is enabled when ``maturity >= 0`` and is satisfied when
+  ``indexed_height + 1 - confirmation_height >= maturity``. The plus one matches
+  the candidate spending block used for mempool acceptance.
+* The time condition is enabled when ``lock_time >= 0`` and is satisfied when
+  Core-adjusted time minus the confirmation block's timestamp reaches that delay.
+  This uses the block timestamp, not median time past.
+* Either condition is sufficient. Zero enables the condition; a negative value
+  disables it. A zero time delay still waits for Core-adjusted time to reach
+  the confirmation timestamp if that block is dated ahead. Both negative conditions leave the
+  designated output locked. Unconfirmed designated outputs stay non-selectable.
+
+Confirmed rows expose ``future`` metadata with the maturity settings,
+``confirmed_time``, ``block_mature`` and ``time_mature`` when evaluated. A page
+that evaluates confirmed future outputs includes ``spendability_context`` with
+its indexed tip, height, candidate ``spend_height`` and ``adjusted_time``.
+A missing clock, changed tip/mempool or unavailable Core context cannot produce
+an eligible result; the request returns retry error ``-32001`` where appropriate.
+Core remains the final authority for transaction acceptance.
+
+The server obtains a fresh Core time offset for each affected UTXO page and
+uses its synchronized host clock. **Run Core and ElectrumX on the same host, as
+in the VPS Docker guide, or synchronize both hosts' clocks.** Do not use mocked
+Core time with this selection mechanism. No extra Core queries are added to
+ordinary asset UTXO pages or pages containing only unconfirmed future outputs.
+Header timestamps are read from the committed index and follow reorganizations.
+
+Balances include locked holdings; they are not a promise of immediately
+spendable funds. Wallets must inspect UTXO eligibility and refresh it before
+constructing/signing a transaction. Time-based eligibility can change without
+a new block and can regress after a clock adjustment or reorganization.
+Existing asset subscriptions describe ownership/activity; refresh UTXOs on
+header changes and before spending rather than treating a subscription hash
+as a permanent maturity guarantee. These rules concern asset outputs; the
+standard native RTM Electrum responses retain their existing format.
+
+Upgrading an older asset index
+------------------------------
+
+Future lock metadata requires **asset schema version 2**. An index created by
+a version using schema 1 must be rebuilt into a separate database. The server
+rejects the older schema instead of guessing maturity or deleting old data.
+An installation whose asset database is still empty needs no migration.
+
+For an already populated schema-1 managed installation, preserve its old
+configuration/database and use new paths. After building the new image, set
+``CORE_CONFIG`` and ``PUBLIC_HOST`` as in the VPS guide, repeat any custom port,
+binding and TLS options, then configure a fresh index::
+
+    sudo systemctl stop rtm-electrumx-assets.timer rtm-electrumx-assets.service
+    sudo python3 -S contrib/install_stack.py \
+        --image electrumx-rtm:mainnet --core-config "$CORE_CONFIG" \
+        --config-dir /etc/rtm-electrumx-v2 \
+        --db-dir /var/lib/rtm-electrumx/assets-v2 \
+        --with-explorer --public-host "$PUBLIC_HOST" --profile low --wallet-api
+
+Record the new ``--config-dir`` and ``--db-dir`` and repeat them on later
+updates. A new config directory needs the previous certificate/key paths again
+if WSS was enabled. The old index remains available for rollback with its old
+server version; Core's blockchain data is retained and Core is not restarted.
+Wait for the new index to synchronize before using wallet balances or transfers.
 
 Offline tests cover parsing, storage and rollback, mempool behavior, individual
 wallet request dispatch, and clean package installation. Live mainnet coin and

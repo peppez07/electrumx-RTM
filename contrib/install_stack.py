@@ -227,6 +227,8 @@ def main(argv=None):
         p.error('Live installation must use the system service directory.')
     # Prove installation before provisioning accounts or service files.
     smoke=('from electrumx.lib.coins import Raptoreum; '
+        'from electrumx.server.raptoreum_db import SCHEMA_VERSION; assert SCHEMA_VERSION == b"2"; '
+        'assert Raptoreum.DAEMON.__name__ == "RaptoreumDaemon"; '
         'assert Raptoreum.DBCLS.__name__ == "RaptoreumDB"; '
         'assert Raptoreum.SESSIONCLS.__name__ == "RaptoreumElectrumX"; '
         'from pathlib import Path; import electrumx.explorer as e; '

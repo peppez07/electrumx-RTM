@@ -3948,7 +3948,7 @@ class Raptoreum(Coin):
        'ger1.raptoreum.com t'
     ]
     SESSIONCLS = RaptoreumElectrumX
-    DAEMON = daemon.DashDaemon
+    DAEMON = daemon.RaptoreumDaemon
     DESERIALIZER = DeserializerRaptoreum
     DBCLS = RaptoreumDB
     MEMPOOLCLS = RaptoreumMemPool

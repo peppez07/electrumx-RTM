@@ -12,7 +12,7 @@ from electrumx.server.db import DB
 
 PREFIX = b'\x00rtm-assets\x01'
 SCHEMA_KEY = PREFIX + b'S'
-SCHEMA_VERSION = b'1'
+SCHEMA_VERSION = b'2'
 CHECKPOINT_KEY = PREFIX + b'C'
 
 
@@ -28,14 +28,14 @@ def output_key(tx_hash, pos):
     return tx_hash + struct.pack('<I', pos)
 
 
-def transfer_record(transfer, tx_hash, pos, height, tx_num, tx_type=0):
+def transfer_record(transfer, tx_hash, pos, height, tx_num, tx_type=0, future=None):
     return {'asset_id': transfer.asset_id, 'amount': transfer.amount,
             'hashX': transfer.hashX.hex(), 'tx_hash': hash_to_hex_str(tx_hash),
             'tx_pos': pos, 'height': height, 'tx_num': tx_num,
             'is_unique': transfer.is_unique, 'unique_id': transfer.unique_id,
             'unique_end': transfer.unique_end, 'script': transfer.original_script.hex(),
             'value': 0, 'source_type': tx_type,
-            'spendable': transfer.canonical and tx_type != 7}
+            'spendable': transfer.canonical, 'future': future}
 
 
 class AssetIndex:
@@ -82,6 +82,7 @@ class AssetIndex:
         try:
             for tx_num, (tx, tx_hash) in enumerate(txs, first_tx_num):
                 events = {}
+                fields = decode_asset_payload(tx)
 
                 def event(record, delta, kind):
                     hashX = bytes.fromhex(record['hashX'])
@@ -104,12 +105,12 @@ class AssetIndex:
                         if txout.value != 0:
                             raise AssetParseError('asset output has nonzero native value')
                         record = transfer_record(transfer, tx_hash, pos, height, tx_num,
-                                                 tx.tx_type)
+                            tx.tx_type, {'maturity':fields['maturity'], 'lock_time':fields['lock_time']}
+                            if tx.tx_type == 7 and pos == fields['lock_output_index'] else None)
                         self._output(record, tx_hash, pos)
                         outputs.append(record)
                         event(record, record['amount'], 'receive')
 
-                fields = decode_asset_payload(tx)
                 if fields and tx.tx_type in (8, 9, 10):
                     aid = hash_to_hex_str(tx_hash) if tx.tx_type == 8 else fields['asset_id']
                     old = self.metadata(aid)
@@ -263,6 +264,7 @@ class RaptoreumDB(DB):
                 after = request.get('after', '')
                 start = record_prefix + bytes.fromhex(after) if after else record_prefix
                 iterator = self.utxo_db.iterator_from(record_prefix, start)
+                confirmation_times = {}
                 for key, value in iterator:
                     suffix = key[len(record_prefix):].hex()
                     if after and suffix <= after:
@@ -273,6 +275,15 @@ class RaptoreumDB(DB):
                     if len(rows) == request['limit']:
                         more = True
                         break
+                    if mode == 'outputs' and item.get('future') is not None:
+                        item['future'] = dict(item['future'])
+                        height = item['height']
+                        if height not in confirmation_times:
+                            header = self.headers_file.read(self.header_offset(height), 80)
+                            if len(header) != 80:
+                                raise AssetIndexError('future confirmation header unavailable; retry')
+                            confirmation_times[height] = struct.unpack_from('<I', header, 68)[0]
+                        item['future']['confirmed_time'] = confirmation_times[height]
                     rows.append(item)
                     last = suffix
             elif mode == 'state':

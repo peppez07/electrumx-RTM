@@ -327,6 +327,32 @@ class DashDaemon(Daemon):
         return await self._send_single('protx', params)
 
 
+class RaptoreumDaemon(DashDaemon):
+    async def future_spend_context(self):
+        '''Fresh tip and Core-adjusted shared-host clock for future selection.'''
+        def valid(info):
+            return (isinstance(info, dict) and info.get('chain') == 'main'
+                and info.get('initialblockdownload') is False
+                and type(info.get('blocks')) is int and type(info.get('headers')) is int
+                and info['blocks'] >= info['headers'] >= 0
+                and isinstance(info.get('bestblockhash'), str)
+                and len(info['bestblockhash']) == 64
+                and all(c in '0123456789abcdef' for c in info['bestblockhash']))
+        before = await self.getblockchaininfo()
+        if not valid(before):
+            raise DaemonError('mainnet Core is not synchronized')
+        # getnetworkinfo() normally caches for 60 seconds. A clock offset
+        # change can relock a future output, so selection bypasses that cache.
+        network = await self._send_single('getnetworkinfo')
+        after = await self.getblockchaininfo()
+        if (not valid(after) or (before['blocks'], before['bestblockhash']) !=
+                (after['blocks'], after['bestblockhash']) or
+                not isinstance(network, dict) or type(network.get('timeoffset')) is not int):
+            raise DaemonError('future selection context changed or unavailable')
+        return {'height':after['blocks'], 'tip':after['bestblockhash'],
+                'adjusted_time':int(time.time())+network['timeoffset']}
+
+
 class FakeEstimateFeeDaemon(Daemon):
     '''Daemon that simulates estimatefee and relayfee RPC calls. Coin that
     wants to use this daemon must define ESTIMATE_FEE & RELAY_FEE'''

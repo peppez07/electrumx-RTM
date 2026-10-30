@@ -83,3 +83,30 @@ async def test_browser_receives_coin_and_asset_subscription_notifications(asset)
     finally:
         server.close()
         await server.wait_closed()
+
+@pytest.mark.asyncio
+async def test_future_asset_eligibility_updates_over_real_websocket_without_tip_change():
+    routed=routed_session()
+    routed.db.view['outputs'][0].update(height=80,source_type=7,spendable=True,
+        future={'maturity':-1,'lock_time':100,'confirmed_time':1000})
+    clock=[1099]
+    async def daemon(method,*params):
+        assert method=='future_spend_context'
+        return {'height':100,'tip':'aa'*32,'adjusted_time':clock[0]}
+    routed.daemon_request=daemon
+    class WalletSession(RPCSession):
+        async def handle_request(self,request):return await routed.handle_request(request)
+    server=await serve_ws(WalletSession,'127.0.0.1',0)
+    port=server.sockets[0].getsockname()[1]
+    try:
+        async with aiohttp.ClientSession() as http:
+            async with http.ws_connect('http://127.0.0.1:'+str(port)) as ws:
+                for ident,now,expected in [(1,1099,False),(2,1100,True),(3,1099,False)]:
+                    clock[0]=now
+                    await ws.send_json({'jsonrpc':'2.0','id':ident,'method':'blockchain.scripthash.assets.listunspent','params':[SCRIPTHASH,ASSET]})
+                    response=(await asyncio.wait_for(ws.receive(),3)).json()
+                    assert 'error' not in response
+                    assert response['result']['items'][0]['spendable'] is expected
+                    assert response['result']['spendability_context']['adjusted_time']==now
+    finally:
+        server.close();await server.wait_closed()

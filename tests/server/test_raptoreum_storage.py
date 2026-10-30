@@ -106,3 +106,60 @@ async def test_existing_coin_only_database_requires_separate_rebuild(tmp_path):
         if db:
             close(db)
         os.chdir(original)
+
+@pytest.mark.asyncio
+async def test_future_asset_headers_reopen_and_reorg_relock_outputs(tmp_path):
+    import hashlib
+    from electrumx.lib.raptoreum_future import future_spendability
+    from tests.server.test_raptoreum_future import future_tx
+    from tests.lib.test_raptoreum_assets import P2PKH
+    original=os.getcwd();db=None
+    request={'mode':'outputs','asset_id':ASSET,'after':'','limit':10,'spends':set()}
+    hashx=hashlib.sha256(P2PKH).digest()[:11]
+    def block(previous,txs,stamp,nonce):
+        raw=raw_block(previous,txs,nonce)
+        return raw[:68]+struct.pack('<I',stamp)+raw[72:]
+    try:
+        db=RaptoreumDB(env(tmp_path));await db.open_for_sync()
+        bp=RaptoreumBlockProcessor(db.env,db,SimpleNamespace(cached_height=lambda:5),None)
+        genesis=block(bytes(32),[],1,0);bp.advance_blocks([Raptoreum.block(genesis,0)])
+        first=block(bp.tip,[future_tx(maturity=3,lock_time=100,output=1).serialize()],1000,1)
+        bp.advance_blocks([Raptoreum.block(first,1)]);await bp.flush(True)
+        def locked_row():return db.asset_view(hashx,request)['outputs'][1]
+        row=locked_row();assert row['future']['confirmed_time']==1000
+        assert future_spendability(row,db.db_height,1000)['spendable'] is False
+        close(db);db=RaptoreumDB(env(tmp_path));await db.open_for_sync()
+        bp=RaptoreumBlockProcessor(db.env,db,SimpleNamespace(cached_height=lambda:5),None)
+        bp.height,bp.tip,bp.tx_count=db.db_height,db.db_tip,db.db_tx_count
+        assert locked_row()['future']['confirmed_time']==1000
+        second=block(bp.tip,[],1001,2);bp.advance_blocks([Raptoreum.block(second,2)])
+        third=block(bp.tip,[],1002,3);bp.advance_blocks([Raptoreum.block(third,3)]);await bp.flush(True)
+        assert future_spendability(locked_row(),db.db_height,1000)['spendable'] is True
+        async with bp.state_lock:
+            bp.backup_blocks([third]);db.flush_backup(bp.flush_data(),bp.touched)
+        assert future_spendability(locked_row(),db.db_height,1000)['spendable'] is False
+        assert future_spendability(locked_row(),db.db_height,1100)['spendable'] is True
+        async with bp.state_lock:
+            bp.backup_blocks([second,first]);db.flush_backup(bp.flush_data(),bp.touched)
+        assert not db.asset_view(hashx,request)['outputs']
+        alternate=block(bp.tip,[future_tx(maturity=3,lock_time=100,output=1).serialize()],2000,4)
+        bp.advance_blocks([Raptoreum.block(alternate,1)]);await bp.flush(True)
+        assert locked_row()['future']['confirmed_time']==2000
+        assert future_spendability(locked_row(),db.db_height,1100)['spendable'] is False
+    finally:
+        if db:close(db)
+        os.chdir(original)
+
+
+@pytest.mark.asyncio
+async def test_legacy_asset_schema_is_rejected_without_deleting_data(tmp_path):
+    original=os.getcwd();db=None
+    try:
+        db=RaptoreumDB(env(tmp_path));await db.open_for_sync()
+        db.utxo_db.put(SCHEMA_KEY,b'1');db.utxo_db.put(b'old-asset-data',b'preserve')
+        close(db);db=RaptoreumDB(env(tmp_path))
+        with pytest.raises(DB.DBError,match='fresh DB_DIRECTORY'):await db.open_for_sync()
+        assert db.utxo_db.get(b'old-asset-data')==b'preserve'
+    finally:
+        if db:close(db)
+        os.chdir(original)
