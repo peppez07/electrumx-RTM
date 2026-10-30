@@ -388,7 +388,8 @@ class Explorer:
         return json_response({'matches': matches})
 
 
-def create_app(core, electrum, rate_limit=120, status_ttl=10, enable_wallet_api=False, metrics_file=None):
+def create_app(core, electrum, rate_limit=120, status_ttl=10, enable_wallet_api=False, metrics_file=None,
+               peers=None):
     from .resources import ResourceSnapshot
     resources = ResourceSnapshot(metrics_file)
     from .compat import PUBLIC_STATUS_PATHS, register_compat
@@ -399,7 +400,8 @@ def create_app(core, electrum, rate_limit=120, status_ttl=10, enable_wallet_api=
     semaphore = asyncio.Semaphore(8)
 
     async def guarded(request, handler):
-        if (request.method == 'OPTIONS' or request.path in ('/api/v1/status', '/api/v1/health', '/api/v1/resources') or
+        if (request.method == 'OPTIONS' or
+                request.path in ('/api/v1/status', '/api/v1/health', '/api/v1/resources', '/api/v1/servers') or
                 request.path == CAPABILITIES_PATH or request.path in PUBLIC_STATUS_PATHS or
                 (request.path in POST_PATHS and not enable_wallet_api)):
             return await handler(request)
@@ -483,7 +485,13 @@ def create_app(core, electrum, rate_limit=120, status_ttl=10, enable_wallet_api=
     async def resource_status(request):
         return json_response(await resources.get())
 
+    async def servers(request):
+        if peers is None:
+            return json_response({'servers': [], 'discovery': False})
+        return json_response(dict(peers.snapshot(), discovery=True))
+
     app.router.add_get('/api/v1/resources', resource_status)
+    app.router.add_get('/api/v1/servers', servers)
     app.router.add_get('/api/v1/health', health)
     app.router.add_get('/api/v1/status', status)
     app.router.add_get('/api/v1/overview', explorer.overview)
@@ -509,6 +517,14 @@ def create_app(core, electrum, rate_limit=120, status_ttl=10, enable_wallet_api=
     app.router.add_get('/', index)
     if STATIC.exists():
         app.router.add_static('/static/', STATIC, show_index=False)
+    if peers is not None:
+        async def discover(app):
+            task = asyncio.create_task(peers.run())
+            yield
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            await peers.close()
+        app.cleanup_ctx.append(discover)
     async def close(app):
         await explorer.public_cache.close()
         for backend in (core, electrum):

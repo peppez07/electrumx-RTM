@@ -298,6 +298,34 @@ async def test_status_only_reads_fixed_local_public_path_and_filters_secrets():
             assert paths == ['/api/v1/status']
 
 
+@pytest.mark.asyncio
+async def test_servers_relays_only_fixed_shape_gateway_urls():
+    module = gateway()
+    async def servers(request):
+        return web.json_response({'discovery': True, 'updated_at': 5, 'secret': 'x', 'servers': [
+            {'url': 'https://203.0.113.9/api/v1/electrum', 'height': 10, 'seen_at': 4,
+             'assets_ready': True, 'smartnode': True, 'operator': 'secret'},
+            {'url': 'https://node.example/api/v1/electrum', 'height': 9, 'seen_at': 3},
+            {'url': 'https://evil.example/api/v1/electrum?x=1', 'height': 9, 'seen_at': 3},
+            {'url': 'http://198.51.100.1/api/v1/electrum', 'height': 9, 'seen_at': 3},
+            {'url': 'https://user@evil/api/v1/electrum', 'height': 9, 'seen_at': 3},
+            {'url': 'https://198.51.100.2/api/v1/electrum', 'height': 'tall', 'seen_at': 3}]})
+    explorer = web.Application()
+    explorer.router.add_get('/api/v1/servers', servers)
+    async with TestServer(explorer) as upstream:
+        async with TestClient(TestServer(module.create_app(explorer_port=upstream.port))) as client:
+            response = await client.get('/api/v1/servers')
+            body = await response.json()
+            assert response.headers['Access-Control-Allow-Origin'] == '*'
+            assert [s['url'] for s in body['servers']] == [
+                'https://203.0.113.9/api/v1/electrum', 'https://node.example/api/v1/electrum']
+            assert body['servers'][1] == {'url': 'https://node.example/api/v1/electrum', 'height': 9,
+                                          'seen_at': 3, 'assets_ready': False, 'smartnode': False}
+            assert 'secret' not in json.dumps(body)
+    async with TestClient(TestServer(module.create_app(explorer_port=0))) as client:
+        assert await (await client.get('/api/v1/servers')).json() == {'servers': [], 'discovery': False}
+
+
 def test_nonloopback_upstream_and_invalid_limits_are_rejected():
     module = gateway()
     for host in ['example.com', '192.168.1.1', '0.0.0.0']:

@@ -173,7 +173,7 @@ def create_app(*, electrum_host='127.0.0.1', electrum_port=50002,
             response = web.Response(status=204)
         else:
             try:
-                if request.path in ('/api/v1/electrum', '/api/v1/status'):
+                if request.path in ('/api/v1/electrum', '/api/v1/status', '/api/v1/servers'):
                     if in_flight >= max_concurrency:
                         response = rpc_error(None, -32001, 'Gateway is busy. Please wait.', 503)
                     else:
@@ -283,28 +283,39 @@ def create_app(*, electrum_host='127.0.0.1', electrum_port=50002,
     async def health(request):
         return web.json_response({'ok': True})
 
+    async def explorer_json(path):
+        async with status_client.get(
+                'http://127.0.0.1:{}{}'.format(explorer_port, path),
+                allow_redirects=False) as response:
+            if response.status != 200:
+                raise ValueError('Explorer unavailable')
+            body = bytearray()
+            async for chunk in response.content.iter_chunked(8192):
+                body.extend(chunk)
+                if len(body) > 262144:
+                    raise ValueError('Explorer response too large')
+            return load_json(body)
+
     async def status(request):
         if not explorer_port:
             return web.json_response({'ready': False, 'phase': 'status_disabled'}, status=503)
         try:
-            async with status_client.get(
-                    'http://127.0.0.1:{}/api/v1/status'.format(explorer_port),
-                    allow_redirects=False) as response:
-                if response.status != 200:
-                    raise ValueError('Explorer unavailable')
-                body = bytearray()
-                async for chunk in response.content.iter_chunked(8192):
-                    body.extend(chunk)
-                    if len(body) > 65536:
-                        raise ValueError('Explorer response too large')
-                data = load_json(body)
-                return web.json_response(public_status(data))
+            return web.json_response(public_status(await explorer_json('/api/v1/status')))
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, TypeError, RecursionError):
             return web.json_response({'ready': False, 'phase': 'status_unavailable'}, status=503)
+
+    async def servers(request):
+        if not explorer_port:
+            return web.json_response({'servers': [], 'discovery': False})
+        try:
+            return web.json_response(public_servers(await explorer_json('/api/v1/servers')))
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, TypeError, RecursionError):
+            return web.json_response({'servers': [], 'discovery': False}, status=503)
 
     app.router.add_post('/api/v1/electrum', electrum)
     app.router.add_get('/api/v1/health', health)
     app.router.add_get('/api/v1/status', status)
+    app.router.add_get('/api/v1/servers', servers)
     return app
 
 
@@ -332,6 +343,30 @@ def public_status(data):
             if type(source.get(key)) is bool:
                 result[section][key] = source[key]
     return result
+
+
+PEER_URL_RE = re.compile(r'https://(?:\d{1,3}(?:\.\d{1,3}){3}|[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?)/api/v1/electrum\Z')
+
+
+def public_servers(data):
+    """Project discovered gateways; only fixed-shape HTTPS gateway URLs are relayed."""
+    if not isinstance(data, dict) or not isinstance(data.get('servers'), list):
+        raise ValueError('Invalid peer list')
+    servers = []
+    for item in data['servers'][:256]:
+        if not isinstance(item, dict) or not isinstance(item.get('url'), str):
+            continue
+        if not PEER_URL_RE.fullmatch(item['url']):
+            continue
+        height, seen = item.get('height'), item.get('seen_at')
+        if type(height) is not int or type(seen) is not int or not 0 < height < 10**9 or seen <= 0:
+            continue
+        servers.append({'url': item['url'], 'height': height, 'seen_at': seen,
+                        'assets_ready': item.get('assets_ready') is True,
+                        'smartnode': item.get('smartnode') is True})
+    updated = data.get('updated_at')
+    return {'discovery': data.get('discovery') is True, 'servers': servers,
+            'updated_at': updated if type(updated) is int else None}
 
 
 def main():

@@ -86,6 +86,29 @@ async def test_ibd_only_calls_status_and_rejects_data(explorer):
 
 
 @pytest.mark.asyncio
+async def test_servers_list_is_served_without_chain_gate(explorer):
+    client, core, _ = explorer
+    core.info.update(initialblockdownload=True, blocks=5)
+    response = await client.get('/api/v1/servers')
+    assert response.status == 200
+    assert await response.json() == {'servers': [], 'discovery': False}
+
+    class Peers:
+        runs = 0
+        def snapshot(self):
+            return {'servers': [{'url': 'https://8.8.8.8/api/v1/electrum'}], 'updated_at': 1}
+        async def run(self):
+            Peers.runs += 1
+        async def close(self):
+            pass
+    async with TestClient(TestServer(create_app(core, Electrum(), peers=Peers()))) as peers_client:
+        body = await (await peers_client.get('/api/v1/servers')).json()
+        assert body['discovery'] is True and body['servers'][0]['url'].startswith('https://8.8.8.8')
+        assert Peers.runs == 1
+    assert all(method == 'getblockchaininfo' for method, _ in core.calls)
+
+
+@pytest.mark.asyncio
 async def test_non_mainnet_is_never_served(explorer):
     client, core, electrum = explorer
     core.info['chain'] = 'test'

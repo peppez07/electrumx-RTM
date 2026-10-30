@@ -117,6 +117,32 @@ directory. An older installation without complete saved options needs its
 original stack install arguments once. Reinstalling only wallet HTTPS leaves
 backend limits unchanged.
 
+## Server discovery
+
+The explorer finds other wallet gateways so MetaYoshi does not depend on a single
+server. Every hour it reads the ENABLED entries of Core's `smartnodelist` (public
+IPv4 only) and calls `server.features` and `blockchain.headers.subscribe` at
+`https://IP/api/v1/electrum` on each, with normal certificate validation. Gateways
+on Raptoreum mainnet with a positive height are listed; known gateways are
+rechecked every 10 minutes and dropped two hours after they stop answering.
+
+The list is public at `GET /api/v1/servers` (through the gateway, only fixed
+`https://host/api/v1/electrum` URLs, heights and flags are relayed):
+
+```sh
+curl https://144.202.18.233/api/v1/servers
+```
+
+A smartnode operator becomes discoverable by running this gateway on the node's
+registered IP. The node itself needs no change. Settings, in
+`/etc/rtm-explorer/explorer.env`:
+
+- `EXPLORER_PEER_DISCOVERY=0` disables probing (the endpoint then lists nothing).
+- `EXPLORER_PEER_SEEDS` sets extra comma-separated gateway hosts that are not
+  smartnodes (default `144.202.18.233`).
+
+The wallet treats the list as candidates and verifies each server itself.
+
 ## Build the extension
 
 In the MetaYoshi checkout:
