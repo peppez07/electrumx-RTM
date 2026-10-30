@@ -11,7 +11,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from urllib.parse import urlsplit
+from urllib.request import urlopen
 
 # The Docker installer must run on a host with only standard-library Python.
 # Import the dependency-free config reader without electrumx's server imports.
@@ -20,6 +22,19 @@ _config_spec = importlib.util.spec_from_file_location('rtm_explorer_config',
 _config = importlib.util.module_from_spec(_config_spec)
 _config_spec.loader.exec_module(_config)
 load_core_config = _config.load_core_config
+
+
+def wait_for_health(port, attempts=15):
+    for attempt in range(attempts):
+        try:
+            with urlopen('http://127.0.0.1:{}/api/v1/health'.format(port), timeout=2) as reply:
+                if json.loads(reply.read(4096)) == {'service':'electrumx-rtm-explorer','version':1}:
+                    return
+        except (OSError, ValueError):
+            pass
+        if attempt+1 < attempts:
+            time.sleep(1)
+    raise RuntimeError('Explorer startup health check failed; inspect journalctl -u rtm-explorer.service.')
 
 
 def service_text(args, uid, gid):
@@ -190,6 +205,7 @@ def main(argv=None):
     subprocess.run(['systemctl', 'daemon-reload'], check=True)
     subprocess.run(['systemctl', 'enable', 'rtm-explorer.service'], check=True)
     subprocess.run(['systemctl', 'restart', 'rtm-explorer.service'], check=True)
+    wait_for_health(args.port)
     firewall_opened = configure_firewall(args)
     print(json.dumps(summary))
     print('Explorer configured. '+('Active UFW permits the explorer port. ' if firewall_opened else '')+

@@ -17,10 +17,16 @@ async function loadAssetData(id, query, fetchAPI) {
   catch (error) { holders = {items:[], next_offset:null, error:error.message}; }
   return {data,holders};
 }
-if (typeof module !== 'undefined') module.exports = {escapeHTML, formatAtomic, loadAssetData};
+function progressLabel(core) {
+  const raw = core.verificationprogress;
+  const value = typeof raw==='number' || (typeof raw==='string' && raw.trim()!=='') ? Number(raw) : NaN;
+  return Number.isFinite(value) ? (Math.max(0,Math.min(1,value))*100).toFixed(3)+'%' : 'Unavailable';
+}
+function refreshDelay(failures) { return Math.min(120000,30000 * 2**failures); }
+if (typeof module !== 'undefined') module.exports = {escapeHTML, formatAtomic, loadAssetData, progressLabel, refreshDelay};
 if (typeof document !== 'undefined') {
   const e = escapeHTML, enc = encodeURIComponent, $ = id => document.getElementById(id);
-  let currentStatus = null, generation = 0, refreshing = false;
+  let currentStatus = null, generation = 0, refreshing = false, pollTimer, failures = 0;
   const integer = value => value === undefined || value === null ? '—' : Number(value).toLocaleString('en-US');
   const shorten = value => value ? String(value).slice(0, 13) + '…' + String(value).slice(-7) : '—';
   const link = (kind, id, label) => `<a class="mono" href="#/${kind}/${enc(id)}">${e(label ?? shorten(id))}</a>`;
@@ -33,6 +39,7 @@ if (typeof document !== 'undefined') {
   const row = (key, value) => `<div class="detail-row"><span class="detail-key">${e(key)}</span><div class="detail-value">${value}</div></div>`;
   const heading = (title, sub = '', extra = '') => `<div class="section-heading"><div><div class="eyebrow-orange">Mainnet explorer</div><h2>${e(title)}</h2>${sub ? `<p class="mono">${e(sub)}</p>` : ''}</div>${extra}</div>`;
   const badge = text => `<span class="badge">${e(text)}</span>`;
+  const copy = value => `<button class="copy-button" data-copy="${e(value)}" aria-label="Copy ${e(value)}">Copy</button>`;
   const pager = (path, params, field, next) => `<div class="pager">${params.has(field) ? `<a class="button" href="#${path}">First page</a>` : ''}${next !== null && next !== undefined ? `<a class="button" href="#${path}?${e(new URLSearchParams({...Object.fromEntries(params), [field]:next}).toString())}">Next page →</a>` : ''}</div>`;
 
   async function api(path) {
@@ -48,11 +55,12 @@ if (typeof document !== 'undefined') {
   function updateStatus(status) {
     currentStatus = status;
     const core = status.core || {}, index = status.electrumx || {};
-    $('strip-status').textContent = status.ready ? `Block #${integer(core.blocks)} · Connected` : `Synchronizing · ${integer(core.blocks)} blocks`;
+    $('strip-status').textContent = status.ready ? `Block #${integer(core.blocks)} · Connected` : `${status.core_stale ? 'Last known' : status.phase==='core_unavailable' ? 'Core unavailable' : 'Synchronizing'} · ${integer(core.blocks)} blocks`;
+    $('refresh-info').textContent = `${status.core_stale ? 'Last Core response' : 'Checked'} ${status.core_checked_at ? new Date(status.core_checked_at*1000).toLocaleTimeString() : '—'} · 30s refresh`;
     if (status.ready) { $('sync-banner').innerHTML = ''; return; }
-    const percent = Math.max(0, Math.min(100, Number(core.verificationprogress || 0)*100));
+    const progress = progressLabel(core), percent = progress==='Unavailable' ? null : parseFloat(progress);
     const label = {core_syncing:'Raptoreum Core is synchronizing', index_syncing:'The ElectrumX asset index is catching up', index_unavailable:'Waiting for the ElectrumX asset service', core_unavailable:'Waiting for Raptoreum Core', wrong_network:'Mainnet connection required'}[status.phase] || 'Connecting to the network';
-    $('sync-banner').innerHTML = `<div class="banner"><div class="banner-symbol">◷</div><div><strong>${e(label)}</strong><p>Balances and transaction data become available after Core and the asset index are synchronized.</p><progress max="100" value="${percent}"></progress><small>${percent.toFixed(3)}% verified · ${integer(core.blocks)} blocks processed · ${integer(core.headers)} headers${index.indexed_height !== undefined ? ` · Index ${integer(index.indexed_height)}` : ''}</small></div></div>`;
+    $('sync-banner').innerHTML = `<div class="banner"><div class="banner-symbol">◷</div><div><strong>${e(label)}</strong><p>Balances and transaction data become available after Core and the asset index are synchronized.</p>${percent===null ? '' : `<progress max="100" value="${percent}"></progress>`}<small>${e(progress)} verified${status.core_stale ? ' (last known; connection unavailable)' : ''} · ${integer(core.blocks)} blocks processed · ${integer(core.headers)} headers${index.indexed_height !== undefined ? ` · Index ${integer(index.indexed_height)}` : ''}</small></div></div>`;
   }
 
   function stats(status) {
@@ -61,20 +69,21 @@ if (typeof document !== 'undefined') {
       ['Latest block', integer(core.blocks), status.ready ? 'Core synchronized' : 'Blocks processed so far'],
       ['Network headers', integer(core.headers), 'Raptoreum mainnet'],
       ['Asset index', integer(index.indexed_height), index.ready ? 'Indexed and ready' : 'Waiting for synchronization'],
-      ['Network status', status.ready ? 'Connected' : 'Syncing', status.ready ? 'Live chain data' : 'Progress updates automatically']
+      ['Network status', status.ready ? 'Connected' : status.phase==='core_unavailable' ? 'Unavailable' : 'Syncing', status.core_stale ? 'Last known Core data' : 'Progress updates automatically']
     ].map(([label,value,note]) => `<div class="stat"><div class="stat-label">${label}</div><div class="stat-value">${value}</div><div class="stat-note">${note}</div></div>`).join('')}</div>`;
   }
 
   function syncView() {
     const core = currentStatus?.core || {};
-    return stats(currentStatus || {}) + heading('Network synchronization', 'The explorer is installed and waiting for complete mainnet data.') + `<div class="card status-card"><div><h3>Raptoreum Core</h3><div class="status-line"><span>Network</span><strong>Mainnet</strong></div><div class="status-line"><span>Processed blocks</span><strong>${integer(core.blocks)}</strong></div><div class="status-line"><span>Received headers</span><strong>${integer(core.headers)}</strong></div><div class="status-line"><span>Verification progress</span><strong>${(Number(core.verificationprogress || 0)*100).toFixed(3)}%</strong></div></div><div><h3>Your explorer is ready to connect</h3><p class="muted">Explore blocks, transactions, addresses, assets and holders once synchronization finishes. This page refreshes automatically.</p><a class="button" href="#/api">View the API reference ↗</a></div></div>`;
+    return stats(currentStatus || {}) + heading('Network synchronization', 'The explorer is installed and waiting for complete mainnet data.') + `<div class="card status-card"><div><h3>Raptoreum Core</h3><div class="status-line"><span>Network</span><strong>Mainnet</strong></div><div class="status-line"><span>Processed blocks</span><strong>${integer(core.blocks)}</strong></div><div class="status-line"><span>Received headers</span><strong>${integer(core.headers)}</strong></div><div class="status-line"><span>Verification progress</span><strong>${e(progressLabel(core))}${currentStatus?.core_stale ? ' (last known)' : ''}</strong></div></div><div><h3>Your explorer is ready to connect</h3><p class="muted">Explore blocks, transactions, addresses, assets and holders once synchronization finishes. This page refreshes automatically.</p><a class="button" href="#/api">View the API reference ↗</a></div></div>`;
   }
 
   async function overview() {
-    const [blocks, txs] = await Promise.all([api('blocks?limit=5'), api('transactions?limit=5')]);
+    const snapshot = await api('overview?limit=5');
+    const blocks = {items:snapshot.blocks}, txs = {items:snapshot.transactions};
     const blockRows = blocks.items.map(b => `<div class="entry"><div class="entry-icon">Bk</div><div class="entry-body">${link('block',b.height,integer(b.height))}<small>${age(b.time)}</small></div><div class="entry-right"><span class="count-pill">${integer(b.tx_count)} transactions</span></div></div>`).join('');
     const txRows = txs.items.map(t => `<div class="entry"><div class="entry-icon">Tx</div><div class="entry-body">${link('tx',t.txid)}<small>${age(t.time)}</small></div><div class="entry-right">${t.coinbase ? 'Block reward' : 'Transaction'}<br>${integer(t.confirmations)} confirmations</div></div>`).join('');
-    return stats(currentStatus) + `<div class="section-heading"><div><div class="eyebrow-orange">On the network</div><h2>Raptoreum at a glance</h2></div>${badge('● Live mainnet')}</div><div class="two-column"><section class="card"><div class="card-head"><h3>Latest blocks</h3><a href="#/blocks">View all ↗</a></div>${blockRows}<div class="card-foot"><a href="#/blocks">View all blocks →</a></div></section><section class="card"><div class="card-head"><h3>Transactions in the latest block</h3></div>${txRows || '<div class="empty">No transactions in this block.</div>'}<div class="card-foot"><a href="#/block/${currentStatus.core.blocks}">Explore the latest block →</a></div></section></div>`;
+    return stats(currentStatus) + `<div class="section-heading"><div><div class="eyebrow-orange">On the network</div><h2>Raptoreum at a glance</h2></div>${badge('As of '+new Date(snapshot.snapshot_at*1000).toLocaleTimeString())}</div><div class="two-column"><section class="card"><div class="card-head"><h3>Latest blocks</h3><a href="#/blocks">View all ↗</a></div>${blockRows}<div class="card-foot"><a href="#/blocks">View all blocks →</a></div></section><section class="card"><div class="card-head"><h3>Transactions in the latest block</h3><a href="#/transactions">View all</a></div>${txRows || '<div class="empty">No transactions in this block.</div>'}<div class="card-foot"><a href="#/block/${currentStatus.core.blocks}">Explore the latest block →</a></div></section></div>`;
   }
 
   async function blocksPage(params, path) {
@@ -84,7 +93,7 @@ if (typeof document !== 'undefined') {
 
   async function blockPage(id, params, path) {
     const b = await api('blocks/'+enc(id)+'?'+params);
-    return heading('Block #'+integer(b.height), b.hash, badge(integer(b.confirmations)+' confirmations')) + `<div class="card details">${row('Block hash',e(b.hash))}${row('Timestamp',e(new Date(b.time*1000).toUTCString()))}${row('Transactions',integer(b.tx_count))}${row('Size',b.size ? integer(b.size)+' bytes' : '—')}${row('Difficulty',e(b.difficulty ?? '—'))}${row('Previous block',b.previousblockhash ? link('block',b.previousblockhash) : 'Genesis')}</div>` + heading('Transactions') + `<div class="card">${table(['Transaction hash'],b.tx.map(id=>[link('tx',id,id)]))}</div>` + pager(path,params,'offset',b.next_offset);
+    return heading('Block #'+integer(b.height), b.hash, badge(integer(b.confirmations)+' confirmations')) + `<div class="card details">${row('Block hash',e(b.hash)+' '+copy(b.hash))}${row('Timestamp',e(new Date(b.time*1000).toUTCString()))}${row('Transactions',integer(b.tx_count))}${row('Size',b.size ? integer(b.size)+' bytes' : '—')}${row('Difficulty',e(b.difficulty ?? '—'))}${row('Previous block',b.previousblockhash ? link('block',b.previousblockhash) : 'Genesis')}</div>` + heading('Transactions') + `<div class="card">${table(['Transaction hash'],b.tx.map(id=>[link('tx',id,id)]))}</div>` + pager(path,params,'offset',b.next_offset);
   }
 
   async function transactionPage(id) {
@@ -94,7 +103,7 @@ if (typeof document !== 'undefined') {
       const addresses = v.scriptPubKey?.addresses || (v.scriptPubKey?.address ? [v.scriptPubKey.address] : []);
       return [e(v.n),addresses.length ? addresses.map(a=>link('address',a,a)).join('<br>') : `<span class="muted">${e(v.scriptPubKey?.type || 'Script output')}</span>`,e(formatAtomic(v.value_atomic))+' RTM',v.asset ? link('asset',v.asset.asset_id)+`<br>${e(formatAtomic(v.asset.amount_atomic))}${v.asset.is_unique ? '<br>Unique IDs '+e(v.asset.unique_id)+'–'+e(v.asset.unique_end) : ''}` : '—'];
     });
-    return heading('Transaction', t.txid, badge(t.confirmations ? integer(t.confirmations)+' confirmations' : 'Pending')) + `<div class="card details">${row('Transaction hash',e(t.txid))}${row('Block',t.blockhash ? link('block',t.blockhash) : 'Pending')}${row('Timestamp',t.time ? e(new Date(t.time*1000).toUTCString()) : 'Pending')}${row('Transaction type',t.coinbase ? 'Block reward' : e(t.type ?? 'Standard'))}${row('Fee',t.coinbase ? 'Block reward transaction' : t.fee_atomic !== null ? e(formatAtomic(t.fee_atomic))+' RTM' : 'Unavailable (input resolution limited to 32 inputs)')}${row('Size',t.size ? integer(t.size)+' bytes' : '—')}</div>` + heading('Inputs') + `<div class="card">${table(['Previous transaction','Output','Value'],inputs)}</div>` + heading('Outputs') + `<div class="card">${table(['Index','Recipient / script','RTM value','Asset'],outputs)}</div>`;
+    return heading('Transaction', t.txid, badge(t.confirmations ? integer(t.confirmations)+' confirmations' : 'Pending')) + `<div class="card details">${row('Transaction hash',e(t.txid)+' '+copy(t.txid))}${row('Block',t.blockhash ? link('block',t.blockhash) : 'Pending')}${row('Timestamp',t.time ? e(new Date(t.time*1000).toUTCString()) : 'Pending')}${row('Transaction type',t.coinbase ? 'Block reward' : e(t.type ?? 'Standard'))}${row('Fee',t.coinbase ? 'Block reward transaction' : t.fee_atomic !== null ? e(formatAtomic(t.fee_atomic))+' RTM' : 'Unavailable (input resolution limited to 32 inputs)')}${row('Size',t.size ? integer(t.size)+' bytes' : '—')}</div>` + heading('Inputs') + `<div class="card">${table(['Previous transaction','Output','Value'],inputs)}</div>` + heading('Outputs') + `<div class="card">${table(['Index','Recipient / script','RTM value','Asset'],outputs)}</div>`;
   }
 
   async function addressPage(id, params, path, assetId) {
@@ -117,7 +126,7 @@ if (typeof document !== 'undefined') {
       rows = data.items.map(item=>[link('tx',item.tx_hash),integer(item.height),item.height > 0 ? badge('Confirmed') : '<span class="badge amber">Pending</span>']);
     }
     const links = tabs.map(name=>`<a ${name===tab ? 'class="active"' : ''} href="#${path}?tab=${name}">${name==='utxos' ? 'Unspent outputs' : name==='assets' ? 'Assets' : 'Transactions'}</a>`).join('');
-    return heading('Address', id) + `<div class="card details">${row('Confirmed RTM balance',`<strong>${e(formatAtomic(a.balance.confirmed))} RTM</strong>`)}${row('Pending RTM change',e(formatAtomic(a.balance.unconfirmed))+' RTM')}${assetId ? row('Asset',link('asset',assetId,assetId)) : ''}</div>` + heading(assetId ? 'Asset activity' : 'Address activity') + `<div class="card"><div class="tabs">${links}</div>${table(headers,rows)}</div>` + pager(path,new URLSearchParams({...Object.fromEntries(params),tab}),data.cursor !== undefined ? 'cursor' : 'offset', data.cursor !== undefined ? data.cursor : data.next_offset) + (data.note ? `<p class="subtitle">${e(data.note)}</p>` : '');
+    return heading('Address', id,copy(id)) + `<div class="card details">${row('Confirmed RTM balance',`<strong>${e(formatAtomic(a.balance.confirmed))} RTM</strong>`)}${row('Pending RTM change',e(formatAtomic(a.balance.unconfirmed))+' RTM')}${assetId ? row('Asset',link('asset',assetId,assetId)) : ''}</div>` + heading(assetId ? 'Asset activity' : 'Address activity') + `<div class="card"><div class="tabs">${links}</div>${table(headers,rows)}</div>` + pager(path,new URLSearchParams({...Object.fromEntries(params),tab}),data.cursor !== undefined ? 'cursor' : 'offset', data.cursor !== undefined ? data.cursor : data.next_offset) + (data.note ? `<p class="subtitle">${e(data.note)}</p>` : '');
   }
 
   function assetName(item) { return item.Asset_name || item.name || item.Asset_Name || 'Asset'; }
@@ -127,14 +136,46 @@ if (typeof document !== 'undefined') {
     return heading('Assets', 'Assets issued on Raptoreum mainnet') + `<div class="card">${table(['Asset','Asset ID','Type','Supply','Owner'],data.items.map(item=>[link('asset',assetID(item),assetName(item)),link('asset',assetID(item)),item.Isunique ? badge('Unique') : 'Fungible',e(item.Circulating_supply ?? '—'),item.owner ? link('address',item.owner) : '—']))}</div>` + pager(path,params,'offset',data.next_offset);
   }
   async function assetPage(id,params,path) {
-    const {data, holders} = await loadAssetData(id,params,api);
-    const details = Object.entries(data).map(([key,value])=>row(key,typeof value==='object' ? `<pre>${e(JSON.stringify(value,null,2))}</pre>` : e(value))).join('');
-    return heading(assetName(data),id,data.Isunique ? badge('Unique asset') : badge('Fungible asset')) + `<div class="card details">${details}</div>` + heading('Holders','Confirmed balances from the Core asset index') + `<div class="card">${holders.error ? `<div class="empty">Holder data unavailable: ${e(holders.error)}</div>` : table(['Address','Asset balance'],holders.items.map(item=>[link('address',item.address,item.address),e(formatAtomic(item.balance_atomic))]))}</div>` + pager(path,params,'offset',holders.next_offset);
+    const data = await api('assets/'+enc(id)), tab=params.get('tab') || 'overview';
+    const name=assetName(data), sub=name.includes('|'), root=name.split('|')[0];
+    const tabs=`<div class="tabs">${['overview','holders','metadata'].map(t=>`<a class="${t===tab ? 'active' : ''}" href="#${path}?tab=${t}">${t[0].toUpperCase()+t.slice(1)}</a>`).join('')}</div>`;
+    let body, pagination='';
+    if(tab==='holders') {
+      const holders=await api('assets/'+enc(id)+'/holders?'+params);
+      body=table(['Address','Confirmed asset balance'],holders.items.map(item=>[link('address',item.address,item.address),e(formatAtomic(item.balance_atomic))]));
+      pagination=pager(path,params,'offset',holders.next_offset);
+    } else if(tab==='metadata') {
+      body=`<div class="details">${Object.entries(data).map(([key,value])=>row(key,typeof value==='object' ? `<pre>${e(JSON.stringify(value,null,2))}</pre>` : e(value))).join('')}</div>`;
+    } else if(tab==='overview') {
+      body=`<div class="details">${row('Asset ID',e(id)+' '+copy(id))}${row('Qualified name',e(name))}${sub ? row('Parent asset',`<a href="#/search/${enc(root)}">${e(root)}</a>`) : ''}${row('Owner',data.owner ? link('address',data.owner,data.owner) : 'Unavailable')}${row('Circulating supply',e(data.Circulating_supply ?? 'Unavailable'))}${row('Decimal places',e(data.Decimalpoint ?? 'Unavailable'))}${row('Updatable',data.Updatable===undefined ? 'Unavailable' : data.Updatable ? 'Yes' : 'No')}${row('Reference',e(data.ReferenceHash ?? 'Unavailable'))}</div>`;
+    } else throw new Error('Unknown asset tab.');
+    return heading(name,id,badge(sub ? 'Subasset' : 'Root asset')+' '+badge(data.Isunique ? 'Unique' : 'Fungible'))+`<section class="card">${tabs}${body}</section>`+pagination;
+  }
+
+  async function transactionsPage(params,path) {
+    const data=await api('transactions?'+params);
+    params.set('block',data.block_hash || data.block);
+    return heading('Transactions','From block #'+integer(data.block),link('block',data.block,'View block'))+`<div class="card">${table(['Transaction','Type','Confirmations','Size'],data.items.map(t=>[link('tx',t.txid,t.txid),t.coinbase ? 'Block reward' : e(t.type ?? 'Standard'),integer(t.confirmations),t.size ? integer(t.size)+' bytes' : '—']))}</div>`+pager(path,params,'offset',data.next_offset);
+  }
+
+  async function networkPage() {
+    const data=await api('network');
+    const sections=[['Mining & chain',data.mining],['Mempool',data.mempool],['Smartnodes',data.smartnodes]];
+    return heading('Network','Public mainnet snapshot · '+new Date(data.snapshot_at*1000).toLocaleTimeString())+`<div class="network-grid">${sections.map(([title,values])=>`<section class="card"><div class="card-head"><h3>${e(title)}</h3></div><div class="details">${values ? Object.entries(values).map(([key,value])=>row(key,typeof value==='object' ? `<pre>${e(JSON.stringify(value,null,2))}</pre>` : e(value))).join('') : '<p class="muted">Data unavailable from Core.</p>'}</div></section>`).join('')}</div>`;
+  }
+
+  async function smartnodesPage(params,path) {
+    const data=await api('smartnodes?'+params);
+    return heading('Smartnodes',integer(data.total)+' nodes · snapshot '+new Date(data.snapshot_at*1000).toLocaleTimeString())+`<div class="card">${table(['Node / outpoint','Service address','Status','Payee','Last paid block'],data.items.map(n=>[e(n.proTxHash || n.id),e(n.address ?? '—'),badge(n.status ?? 'Unavailable'),n.payee ? link('address',n.payee) : '—',integer(n.lastpaidblock)]))}</div>`+pager(path,params,'offset',data.next_offset);
   }
 
   function apiPage() {
     const endpoints = [
       ['status','Synchronization, indexed tip and readiness. Available during sync.'],
+      ['health','Process health without calling Core; does not indicate chain readiness.'],
+      ['overview?limit=5','Shared public block/transaction snapshot, at most 10 entries.'],
+      ['network','Mining, mempool and smartnode count; null if a metric is unavailable.'],
+      ['smartnodes?limit=25&offset=0','Paginated public smartnode list, with snapshot time.'],
       ['search?q=QUERY','Find a block, transaction, mainnet address or asset name/ID.'],
       ['blocks?limit=10&start=HEIGHT','Recent blocks, descending height. next_start continues the page.'],
       ['blocks/HEIGHT_OR_HASH?limit=25&offset=0','Block details with paginated transaction IDs.'],
@@ -186,29 +227,53 @@ if (typeof document !== 'undefined') {
       else if (!currentStatus?.ready) html = syncView();
       else if (!parts.length) html = await overview();
       else if (parts[0] === 'blocks') html = await blocksPage(params,path);
+      else if (parts[0] === 'transactions') html = await transactionsPage(params,path);
+      else if (parts[0] === 'network') html = await networkPage();
+      else if (parts[0] === 'smartnodes') html = await smartnodesPage(params,path);
+      else if (parts[0] === 'search' && parts[1]) {
+        const result=await api('search?q='+enc(parts[1]));
+        const match=result.matches[0];
+        if(!match) throw new Error('No matching record was found.');
+        location.hash='/'+(match.type==='transaction' ? 'tx' : match.type)+'/'+enc(match.id);
+        return;
+      }
       else if (parts[0] === 'block' && parts[1]) html = await blockPage(parts[1],params,path);
       else if (parts[0] === 'tx' && parts[1]) html = await transactionPage(parts[1]);
       else if (parts[0] === 'address' && parts[1]) html = await addressPage(parts[1],params,path,parts[2]==='asset' ? parts[3] : null);
       else if (parts[0] === 'assets') html = await assetsPage(params,path);
       else if (parts[0] === 'asset' && parts[1]) html = await assetPage(parts[1],params,path);
       else throw new Error('This explorer page does not exist.');
-      if (turn === generation) $('view').innerHTML = html;
+      if (turn === generation) {
+        $('view').innerHTML = html;
+        document.querySelectorAll('nav a').forEach(a=>{
+          const active=(a.hash==='#/' && !parts.length) || (a.hash!=='#/' && a.hash==='#/'+parts[0]);
+          a.classList.toggle('active',active);
+          if(active) a.setAttribute('aria-current','page'); else a.removeAttribute('aria-current');
+        });
+      }
     } catch (error) {
       if (turn === generation) $('view').innerHTML = `<div class="card error-card"><h2>Data unavailable</h2><p>${e(error.message)}</p><a class="button" href="#/">Back to overview</a></div>`;
     }
   }
 
-  async function refreshStatus() {
-    if (refreshing) return;
+  async function refreshStatus(manual=false) {
+    clearTimeout(pollTimer);
+    if (refreshing || document.hidden) return;
     refreshing = true;
     const wasReady = currentStatus?.ready;
     try {
       updateStatus(await api('status'));
-      if (wasReady !== currentStatus.ready || !currentStatus.ready || !location.hash || location.hash === '#/') await render();
+      failures=currentStatus.phase==='core_unavailable' ? failures+1 : 0;
+      const dynamic=/^#\/(?:blocks|transactions|network|smartnodes)(?:\?|$)/.test(location.hash);
+      if (manual || dynamic || wasReady !== currentStatus.ready || !currentStatus.ready || !location.hash || location.hash === '#/') await render();
     } catch (error) {
-      updateStatus({ready:false, phase:'core_unavailable',core:{}});
+      failures++;
+      updateStatus({...currentStatus,ready:false, phase:'core_unavailable',core_stale:!!currentStatus?.core});
       await render();
-    } finally { refreshing = false; }
+    } finally {
+      refreshing = false;
+      if(!document.hidden) pollTimer=setTimeout(refreshStatus,refreshDelay(failures));
+    }
   }
   $('search').addEventListener('submit', async event => {
     event.preventDefault();
@@ -218,8 +283,8 @@ if (typeof document !== 'undefined') {
       const result = await api('search?q='+enc($('query').value.trim()));
       if (!result.matches.length) throw new Error('No matching record was found.');
       const match = result.matches[0], kind = match.type==='transaction' ? 'tx' : match.type;
-      location.hash = '/'+kind+'/'+enc(match.id);
-      await render();
+      const target='#/'+kind+'/'+enc(match.id);
+      if(location.hash===target) await render(); else location.hash=target;
     } catch (error) {
       ++generation;
       $('view').innerHTML = `<div class="card error-card"><h2>Search unavailable</h2><p>${e(error.message)}</p><a class="button" href="#/">Back to overview</a></div>`;
@@ -231,6 +296,24 @@ if (typeof document !== 'undefined') {
   });
   try { document.body.classList.toggle('dark',localStorage.getItem('rtm-theme')==='dark'); } catch {}
   window.addEventListener('hashchange',render);
+  document.addEventListener('visibilitychange',()=>{
+    clearTimeout(pollTimer);
+    if(!document.hidden) refreshStatus();
+  });
+  $('refresh').addEventListener('click',()=>refreshStatus(true));
+  $('view').addEventListener('click',async event=>{
+    const button=event.target.closest('[data-copy]');
+    if(!button) return;
+    try {
+      if(navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(button.dataset.copy);
+      else {
+        const input=document.createElement('textarea');input.value=button.dataset.copy;
+        input.className='copy-input';document.body.append(input);input.select();
+        const copied=document.execCommand('copy');input.remove();
+        if(!copied) throw new Error('Copy unavailable');
+      }
+      button.textContent='Copied';
+    } catch { button.textContent='Select text to copy'; }
+  });
   refreshStatus();
-  setInterval(refreshStatus,15000);
 }

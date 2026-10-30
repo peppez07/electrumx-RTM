@@ -14,6 +14,7 @@ from aiohttp import web
 from electrumx.lib.coins import Raptoreum
 from electrumx.lib.raptoreum_assets import parse_asset_script
 from .clients import BackendError
+from .cache import ReadCache
 
 HEX = re.compile(r'^[0-9a-fA-F]{64}$')
 STATIC = Path(__file__).parent / 'static'
@@ -97,13 +98,17 @@ class Explorer:
         self.core_info = None
         self.checked = 0
         self.status_lock = asyncio.Lock()
+        self.public_cache = ReadCache()
+        self.last_core = {}
+        self.core_checked_at = None
 
     async def status(self, fresh=False):
         async with self.status_lock:
             if not fresh and self.cached_status and time.monotonic()-self.checked < self.status_ttl:
                 return self.cached_status
             result = {'network': 'mainnet', 'ready': False, 'phase': 'core_unavailable',
-                      'core': {}, 'electrumx': {'ready': False},
+                      'core': dict(self.last_core), 'core_stale': bool(self.last_core),
+                      'core_checked_at': self.core_checked_at, 'electrumx': {'ready': False},
                       'checked_at': int(time.time())}
             try:
                 info = await self.core.call('getblockchaininfo')
@@ -111,6 +116,9 @@ class Explorer:
                 result['core'] = {k: info.get(k) for k in (
                     'chain', 'blocks', 'headers', 'bestblockhash',
                     'initialblockdownload', 'verificationprogress')}
+                result['core_stale'] = False
+                result['core_checked_at'] = self.core_checked_at = result['checked_at']
+                self.last_core = dict(result['core'])
                 if info.get('chain') != 'main':
                     result['phase'] = 'wrong_network'
                 elif (info.get('initialblockdownload') is not False or
@@ -143,6 +151,25 @@ class Explorer:
         else:
             block_hash = hash_id(identifier)
         return await self.core.call('getblock', [block_hash, 1])
+
+    async def overview(self, request):
+        status = await self.gate()
+        limit = number(request.query.get('limit'), default=5, maximum=10, minimum=1)
+        tip, height = status['core']['bestblockhash'], status['core']['blocks']
+        async def load():
+            blocks, transactions = [], []
+            for h in range(height, max(-1, height-limit), -1):
+                block = await self.block(str(h))
+                blocks.append(dict({k:v for k,v in block.items() if k not in ('tx','hex')},
+                                   tx_count=len(block.get('tx', []))))
+                if h == height:
+                    for txid in block.get('tx', [])[:limit]:
+                        tx = await self.transaction_data(txid, resolve_inputs=False)
+                        transactions.append({k:tx.get(k) for k in (
+                            'txid','time','size','confirmations','coinbase','type')})
+            return {'blocks':blocks, 'transactions':transactions, 'indexed_tip':tip,
+                    'indexed_height':height, 'snapshot_at':int(time.time())}
+        return json_response(await self.public_cache.get(('overview',tip,limit), load, 30))
 
     async def blocks(self, request):
         status = await self.gate()
@@ -223,7 +250,7 @@ class Explorer:
         for txid in ids[offset:offset+limit]:
             item = await self.transaction_data(txid, resolve_inputs=False)
             items.append({k: item.get(k) for k in ('txid', 'time', 'size', 'confirmations', 'coinbase', 'type')})
-        return json_response({'items': items, 'block': block.get('height'),
+        return json_response({'items': items, 'block': block.get('height'), 'block_hash': block.get('hash'),
                               'next_offset': offset+limit if len(ids) > offset+limit else None})
 
     async def address(self, request):
@@ -338,7 +365,7 @@ def create_app(core, electrum, rate_limit=120, status_ttl=10, enable_wallet_api=
     semaphore = asyncio.Semaphore(8)
 
     async def guarded(request, handler):
-        if (request.method == 'OPTIONS' or request.path == '/api/v1/status' or
+        if (request.method == 'OPTIONS' or request.path in ('/api/v1/status', '/api/v1/health') or
                 request.path == CAPABILITIES_PATH or request.path in PUBLIC_STATUS_PATHS or
                 (request.path in POST_PATHS and not enable_wallet_api)):
             return await handler(request)
@@ -416,7 +443,12 @@ def create_app(core, electrum, rate_limit=120, status_ttl=10, enable_wallet_api=
     async def index(request):
         return web.FileResponse(STATIC/'index.html')
 
+    async def health(request):
+        return json_response({'service':'electrumx-rtm-explorer', 'version':1})
+
+    app.router.add_get('/api/v1/health', health)
     app.router.add_get('/api/v1/status', status)
+    app.router.add_get('/api/v1/overview', explorer.overview)
     app.router.add_get('/api/v1/search', explorer.search)
     app.router.add_get('/api/v1/blocks', explorer.blocks)
     app.router.add_get('/api/v1/blocks/{id}', explorer.block_detail)
@@ -440,6 +472,7 @@ def create_app(core, electrum, rate_limit=120, status_ttl=10, enable_wallet_api=
     if STATIC.exists():
         app.router.add_static('/static/', STATIC, show_index=False)
     async def close(app):
+        await explorer.public_cache.close()
         for backend in (core, electrum):
             if hasattr(backend, 'close'):
                 await backend.close()

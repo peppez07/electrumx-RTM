@@ -108,3 +108,14 @@ def test_wallet_relay_requires_explicit_flag_and_reinstall_preserves_choice(tmp_
     options.wallet_api = False
     module.stage_files(options)
     assert 'EXPLORER_WALLET_API=0' in environment.read_text()
+
+def test_health_probe_only_accepts_our_service(monkeypatch):
+    module=installer()
+    class Reply:
+        def __enter__(self): return self
+        def __exit__(self,*args): pass
+        def read(self,*args): return b'{"service":"unrelated"}'
+    monkeypatch.setattr(module, 'urlopen', lambda *a,**k:Reply())
+    with pytest.raises(RuntimeError):module.wait_for_health(8080,attempts=1)
+    monkeypatch.setattr(Reply,'read',lambda *a:b'{"service":"electrumx-rtm-explorer","version":1}')
+    module.wait_for_health(8080,attempts=1)

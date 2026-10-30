@@ -179,3 +179,16 @@ async def test_small_and_large_monetary_fields_always_use_strings(reference):
     metadata = await (await client.get('/api/v1/assets/'+ASSET)).json()
     assert metadata['Circulating_supply'] == '1'
     assert metadata['Distribution']['Amount'] == '2'
+
+@pytest.mark.asyncio
+async def test_lightweight_network_and_paginated_nodes_share_public_cache(reference):
+    client,core,_=reference
+    for path in ('network','smartnodes?limit=1'):
+        response=await client.get('/api/v1/'+path)
+        assert response.status == 200
+        data=await response.json()
+        assert data['snapshot_at']
+    assert data['items'][0]['status'] == 'ENABLED' and data['next_offset'] is None
+    calls=len([m for m,_ in core.calls if m=='smartnodelist'])
+    await client.get('/api/v1/smartnodes?limit=1')
+    assert len([m for m,_ in core.calls if m=='smartnodelist']) == calls

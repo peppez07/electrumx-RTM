@@ -36,8 +36,9 @@ Bundled mainnet explorer
 
 The optional browser explorer provides an Etherscan-inspired overview, search,
 blocks, transaction inputs and outputs, RTM address balances and history, asset
-balances and outputs, an asset directory, metadata and holder pages. It includes
-a responsive layout, dark mode, public read APIs and opt-in non-custodial relay. No wallet or
+balances and outputs, an asset directory, metadata and holder tabs, a transaction
+list, smartnodes and network metrics. It includes
+a responsive layout, dark mode, copy buttons, public read APIs and opt-in non-custodial relay. No wallet or
 private keys are required. Metadata is displayed as text; external content is
 not fetched automatically.
 
@@ -55,17 +56,44 @@ install this checkout and automatically configure the explorer::
         --core-config /var/lib/rtm-mainnet/core/raptoreum.conf \
         --public-host YOUR_SERVER_IP
 
-This uses ``/opt/rtm-explorer/venv``, creates an unprivileged service account and
-starts ``rtm-explorer.service``. It preserves existing Core and ElectrumX services.
-Configuration and a minimal private copy of RPC credentials are stored under
-``/etc/rtm-explorer`` outside the checkout. Reinstalling preserves those files;
-configuration changes must be made explicitly. The URL defaults to port 8080.
-An active UFW firewall receives an allow rule for this port when binding publicly;
-the installer never enables an inactive firewall. Other server/provider firewalls
-must permit that TCP port. Specify ``--port`` to
-choose another port; ``--electrum-port`` defaults to 50001. Without
-``--public-host``, setup prints the server's local route address, which may be
-private behind NAT.
+This shortcut installs into ``/opt/rtm-electrumx/venv`` and configures both
+``rtm-electrumx-assets.service`` and ``rtm-explorer.service``. Core must already
+run mainnet with ``txindex=1``, ``assetindex=1`` and ``prune=0``. Setup never
+restarts, downloads, upgrades or reindexes Core. A timer waits for Core to finish
+synchronizing before starting the asset-capable indexer. Stop an obsolete
+coin-only indexer explicitly to avoid two indexers competing for memory; its
+existing database should be preserved.
+
+The complete setup is also available for an existing Docker image::
+
+    sudo python3 contrib/install_stack.py --image electrumx-rtm \
+        --core-config /path/to/raptoreum.conf --with-explorer \
+        --public-host YOUR_SERVER_IP
+
+``sh contrib/install_electrumx.sh --setup --with-explorer`` provides the same
+native service setup. No arguments still performs package installation only.
+Use ``--dry-run`` to inspect setup without reading credentials or changing files.
+The default ``--profile auto`` selects the low profile below 4 GiB RAM: 16 MB
+index cache, 256 MiB backend memory limit, 256 MiB additional swap, half a CPU
+and 50 sessions. ``--profile low`` or ``standard`` chooses explicitly. These are
+service limits; Core and the operating system need additional memory and disk.
+
+Settings live in ``/etc/rtm-electrumx`` and ``/etc/rtm-explorer`` with restricted
+permissions. The backend uses a fresh ``/var/lib/rtm-electrumx/assets-v1`` database;
+``--db-dir`` selects another path. Reinstalling preserves RPC credentials,
+database selection, ports, unknown environment options and configured TLS.
+Repeat any custom port/path options. Conflicting configurations or unrelated
+service units are rejected rather than overwritten.
+
+Private listeners default to TCP 50002, WebSocket 50003 and admin RPC 8001.
+Supply ``--tls-cert CERT --tls-key KEY`` to add public WSS on 50004; the
+installer validates and copies the matching certificate/key. ``--no-tls``
+explicitly disables a previous WSS listener. Certificates are not issued
+automatically. Use a trusted HTTPS reverse proxy for the browser API. The
+explorer defaults to HTTP 8080; active UFW receives a rule for that port
+and optional WSS. Other host/provider firewalls must permit these ports.
+Use ``--port``, ``--tcp-port``, ``--ws-port``, ``--rpc-port`` and ``--wss-port``
+to choose ports. Core and admin RPC remain private.
 
 For an existing installed environment, or the Docker image built below::
 
@@ -92,11 +120,24 @@ settings and a loopback ``rpcconnect``; config includes are rejected. The explor
 uses explicit allowlisted methods and never exposes a general RPC proxy. HTTP
 transaction relay is disabled unless explicitly enabled as described below.
 
+The UI uses bundled HTML, CSS and JavaScript without a frontend framework,
+external fonts or a separate statistics database. Hidden tabs pause polling;
+visible pages refresh status every 30 seconds with failure backoff. Dashboard,
+network and smartnode snapshots share a process-local cache capped at 2 MiB
+and 32 entries, invalidated by the indexed tip and a 30-second lifetime.
+Snapshot timestamps show when these public views were collected. Wallet
+balances, fees, policies and broadcasts are not cached. Holders load only when
+the holder tab is selected. Lost RPC connections show explicitly stale
+last-known progress; unknown progress is displayed as unavailable.
+
 Explorer HTTP API
 -----------------
 
 The explorer data routes are GET under ``/api/v1/``. The browser's API page documents them:
 
+* ``health`` -- explorer process health without a Core call; not chain readiness.
+* ``overview?limit=5`` -- bounded shared public dashboard snapshot (maximum 10).
+* ``network`` and ``smartnodes?limit=25&offset=0`` -- public network snapshots.
 * ``status`` -- readiness and synchronization; available during initial sync.
 * ``search?q=QUERY`` -- address, transaction, block or asset name/ID lookup.
 * ``blocks?start=HEIGHT&limit=10`` and ``blocks/HEIGHT_OR_HASH``.

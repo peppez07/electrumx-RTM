@@ -252,3 +252,44 @@ async def test_pending_history_fees_are_atomic_strings(explorer):
     electrum.call = pending
     result = await (await client.get('/api/v1/addresses/'+ADDRESS+'/history')).json()
     assert result['items'][0]['fee'] == '9007199254740993'
+
+
+@pytest.mark.asyncio
+async def test_core_disconnect_keeps_explicit_last_known_progress_but_blocks_financial_data(explorer):
+    from electrumx.explorer.clients import BackendError
+    client,core,_=explorer
+    core.info.update(initialblockdownload=True,blocks=55,headers=100,verificationprogress=0.29)
+    initial=await (await client.get('/api/v1/status')).json()
+    async def unavailable(*args):raise BackendError()
+    core.call=unavailable
+    result=await (await client.get('/api/v1/status')).json()
+    assert result['phase'] == 'core_unavailable' and result['ready'] is False
+    assert result['core']['blocks'] == 55 and result['core']['verificationprogress'] == 0.29
+    assert result['core_stale'] is True
+    assert result['core_checked_at'] == initial['core_checked_at']
+    assert (await client.get('/api/v1/addresses/'+ADDRESS)).status == 503
+
+
+@pytest.mark.asyncio
+async def test_dashboard_reuses_bounded_public_work_and_invalidates_at_new_tip(explorer):
+    client,core,electrum=explorer
+    response=await client.get('/api/v1/overview?limit=2')
+    assert response.status == 200
+    result=await response.json()
+    assert len(result['blocks']) == 2 and len(result['transactions']) == 2
+    assert result['indexed_tip'] == TIP
+    count=len([method for method,_ in core.calls if method=='getrawtransaction'])
+    await client.get('/api/v1/overview?limit=2')
+    assert len([method for method,_ in core.calls if method=='getrawtransaction']) == count
+    core.info.update(blocks=101,headers=101,bestblockhash='12'*32)
+    electrum.features['rtm_assets'].update(indexed_height=101,indexed_tip='12'*32)
+    await client.get('/api/v1/overview?limit=2')
+    assert len([method for method,_ in core.calls if method=='getrawtransaction']) > count
+
+
+@pytest.mark.asyncio
+async def test_static_health_endpoint_requires_no_core_calls(explorer):
+    client,core,electrum=explorer
+    result=await (await client.get('/api/v1/health')).json()
+    assert result == {'service':'electrumx-rtm-explorer','version':1}
+    assert core.calls == [] and electrum.calls == []

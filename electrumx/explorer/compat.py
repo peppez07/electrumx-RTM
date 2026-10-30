@@ -6,13 +6,14 @@ No remote explorer is contacted; all chain results come from local backends.
 
 import asyncio
 import json
+import time
 from decimal import Decimal, localcontext
 from urllib.parse import parse_qs
 
 from aiohttp import web
 
 from .clients import BackendError
-from .service import APIError, address_hash, hash_id, json_response, normalize, number
+from .service import APIError, address_hash, hash_id, json_response, normalize, number, pagination, page
 
 PUBLIC_STATUS_PATHS = frozenset({
     '/api/getblockcount', '/api/getblockchaininfo', '/api/project',
@@ -135,9 +136,44 @@ class CompatibilityAPI:
             raise APIError(503, 'response_too_large', 'Smartnode response exceeds 5000 records.')
         return json_response([dict(value, _id=key, id=key) for key,value in result.items()])
 
+    async def public_snapshot(self, name, factory):
+        state = await self.explorer.gate()
+        async def load():
+            return dict(await factory(), snapshot_at=int(time.time()),
+                        indexed_tip=state['core']['bestblockhash'])
+        return await self.explorer.public_cache.get(
+            (name,state['core']['bestblockhash']), load, 30)
+
+    async def network(self, request):
+        async def load():
+            result = {}
+            for name,method,params in (('mining','getmininginfo',[]),
+                    ('mempool','getmempoolinfo',[]), ('smartnodes','smartnode',['count'])):
+                try:
+                    result[name] = await self.call(method, params)
+                except BackendError:
+                    result[name] = None
+            return result
+        return json_response(await self.public_snapshot('network', load))
+
+    async def node_page(self, request):
+        limit, offset = pagination(request)
+        async def load():
+            result = await self.call('smartnodelist', ['json'])
+            if not isinstance(result, dict):
+                raise BackendError()
+            if len(result) > 5000:
+                raise APIError(503, 'response_too_large', 'Smartnode response exceeds 5000 records.')
+            return {'items':[dict(value, id=key) for key,value in sorted(result.items())]}
+        data = await self.public_snapshot('smartnodes', load)
+        return json_response(dict(page(data['items'], limit, offset),
+            total=len(data['items']), snapshot_at=data['snapshot_at'], indexed_tip=data['indexed_tip']))
+
 
 def register_compat(app, explorer):
     api = CompatibilityAPI(explorer)
+    app.router.add_get('/api/v1/network', api.network)
+    app.router.add_get('/api/v1/smartnodes', api.node_page)
     for path in ('getblockcount', 'getblockchaininfo'):
         app.router.add_get('/api/'+path, api.status)
     app.router.add_get('/api/getblock', api.block)

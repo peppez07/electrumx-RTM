@@ -3,7 +3,7 @@
 from pathlib import Path
 
 
-def load_core_config(path):
+def read_core_settings(path):
     settings = {}
     section = ''
     for raw in Path(path).read_text().splitlines():
@@ -18,6 +18,11 @@ def load_core_config(path):
         if '=' in line:
             key, value = line.split('=', 1)
             settings[key.strip()] = value.strip()
+    return settings
+
+
+def load_core_config(path):
+    settings = read_core_settings(path)
     if (settings.get('chain', 'main') != 'main' or
         settings.get('testnet', '0') not in ('0', 'false') or
         settings.get('regtest', '0') not in ('0', 'false') or 'includeconf' in settings):
