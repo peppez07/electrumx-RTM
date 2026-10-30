@@ -1,6 +1,7 @@
 import importlib.util
 import json
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 from urllib.parse import unquote, urlsplit
@@ -33,7 +34,7 @@ def test_stdlib_dry_run_changes_nothing_and_exposes_no_credentials(tmp_path):
     result=subprocess.run(command,capture_output=True,text=True)
     assert result.returncode == 0, result.stderr
     data=json.loads(result.stdout)
-    assert data['cache_mb'] == 16 and data['backend_memory_mib'] == 256
+    assert data['cache_mb'] == 16 and data['backend_memory_mib'] == 1024
     assert data['waits_for_core_sync'] is True
     assert data['explorer_url'] == 'http://203.0.113.5:8080/'
     assert not (tmp_path/'missing').exists()
@@ -43,7 +44,59 @@ def test_auto_profile_uses_available_ram():
     installer=module()
     assert installer.profile('auto',2*1024**3)['cache_mb'] == 16
     assert installer.profile('auto',8*1024**3)['cache_mb'] == 64
-    assert installer.profile('low',8*1024**3)['memory_mib'] == 256
+    assert installer.profile('low',8*1024**3)['memory_mib'] == 1024
+
+
+@pytest.mark.parametrize('selected_profile', ['low', 'standard'])
+def test_backend_limits_leave_indexing_headroom_and_match_across_runtimes(tmp_path, selected_profile):
+    installer=module(); args=options(tmp_path,'--profile',selected_profile)
+    result=installer.stage(args,123,456)
+    docker_unit=(Path(args.systemd_dir)/installer.SERVICE).read_text()
+    docker_lines=dict(line.split('=',1) for line in docker_unit.splitlines() if '=' in line)
+    command=shlex.split(docker_lines['ExecStart'])
+    ram_mib=int(command[command.index('--memory')+1].removesuffix('m'))
+    total_mib=int(command[command.index('--memory-swap')+1].removesuffix('m'))
+    # Production OOM kills occurred at up to 519 MiB RSS. CACHE_MB excludes
+    # interpreter, DB, prefetch and parsed-block allocations; allow headroom.
+    assert ram_mib >= 519+256
+    assert total_mib-ram_mib == 512
+    assert ram_mib <= 1536 and total_mib <= 2048
+    assert int(docker_lines['MemoryMax'].removesuffix('M')) == ram_mib
+    assert int(docker_lines['MemorySwapMax'].removesuffix('M')) == total_mib-ram_mib
+    assert result['backend_memory_mib'] == ram_mib
+    args.image=None; args.venv='/opt/rtm/venv'
+    installer.stage(args,123,456)
+    native_unit=(Path(args.systemd_dir)/installer.SERVICE).read_text()
+    native_lines=dict(line.split('=',1) for line in native_unit.splitlines() if '=' in line)
+    assert native_lines['MemoryMax'] == docker_lines['MemoryMax']
+    assert native_lines['MemorySwapMax'] == docker_lines['MemorySwapMax']
+
+
+@pytest.mark.parametrize('selected_profile,legacy_ram', [('low',256), ('standard',512)])
+def test_reinstall_upgrades_legacy_memory_budget_preserving_existing_data_and_ports(tmp_path, selected_profile, legacy_ram):
+    installer=module(); args=options(tmp_path,'--profile',selected_profile,
+        '--tcp-port','51002','--ws-port','51003','--rpc-port','8101')
+    installer.stage(args,123,456)
+    manifest=Path(args.config_dir)/'installation.json'
+    saved=json.loads(manifest.read_text())
+    saved['backend_memory_mib']=legacy_ram
+    manifest.write_text(json.dumps(saved))
+    unit=Path(args.systemd_dir)/installer.SERVICE
+    unit.write_text(installer.MARKER+'\n[Service]\nMemoryMax='+str(legacy_ram)+'M\nMemorySwapMax=256M\n')
+    marker=Path(args.db_dir)/'indexed-data'; marker.write_bytes(b'existing index')
+    core=Path(args.core_config); original_core=core.read_bytes()
+    rpc=Path(args.config_dir)/'core-rpc.json'; original_rpc=rpc.read_bytes()
+    restored=installer.parse_options(['--reinstall','--config-dir',args.config_dir])
+    result=installer.stage(restored,123,456)
+    assert result['backend_memory_mib'] >= 519+256
+    assert result['profile'] == selected_profile
+    assert 'MemoryMax='+str(result['backend_memory_mib'])+'M' in unit.read_text()
+    assert 'MemorySwapMax=512M' in unit.read_text()
+    assert marker.read_bytes() == b'existing index'
+    assert core.read_bytes() == original_core and rpc.read_bytes() == original_rpc
+    assert result['db_directory'] == str(Path(args.db_dir).resolve())
+    assert (result['tcp_port'],result['ws_port']) == (51002,51003)
+    assert 'rpc://127.0.0.1:8101' in (Path(args.config_dir)/'server.env').read_text()
 
 
 @pytest.mark.parametrize('replacement',[('chain=main','chain=test'),
@@ -71,8 +124,8 @@ def test_staging_creates_one_backend_with_private_escaped_rpc_and_wait_gate(tmp_
     assert env['SERVICES'] == 'tcp://127.0.0.1:50002,ws://127.0.0.1:50003,rpc://127.0.0.1:8001'
     unit=(Path(args.systemd_dir)/'rtm-electrumx-assets.service').read_text()
     assert 'ExecCondition=' in unit and 'core_ready.py' in unit
-    assert '--user 123:456' in unit and '--memory 256m' in unit
-    assert '--memory-swap 512m' in unit and '--cpus 0.5' in unit
+    assert '--user 123:456' in unit and '--memory 1024m' in unit
+    assert '--memory-swap 1536m' in unit and '--cpus 0.5' in unit
     assert '--read-only' in unit and 'rtm-core.service' not in unit
     assert (Path(args.runtime_dir)/'core_ready.py').is_file()
     assert result['waits_for_core_sync'] is True
@@ -109,7 +162,7 @@ def test_native_service_uses_installed_executable_and_dedicated_user(tmp_path):
     unit=(Path(args.systemd_dir)/'rtm-electrumx-assets.service').read_text()
     normalized=unit.replace(chr(92),'/').replace('//','/')
     assert 'User=rtm-electrumx' in unit and '/opt/rtm/venv/bin/electrumx_server' in normalized
-    assert 'MemoryMax=256M' in unit and 'MemorySwapMax=256M' in unit
+    assert 'MemoryMax=1024M' in unit and 'MemorySwapMax=512M' in unit
 
 
 def test_half_tls_pair_and_conflicting_ports_are_rejected(tmp_path):

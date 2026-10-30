@@ -88,6 +88,35 @@ this is distinct from confirmed synchronization progress. Diagnose the indexer
 before relying on balances. A working HTTPS health endpoint alone does not prove
 the index is ready.
 
+If the kernel log reports `Memory cgroup out of memory` and kills
+`electrumx_server` (sometimes displayed as `electrum_serve`), inspect the backend
+limits as well as free host RAM:
+
+```sh
+sudo journalctl -k -g 'Memory cgroup out of memory|Killed process' -n 30 --no-pager
+sudo systemctl show rtm-electrumx-assets -p MemoryMax -p MemorySwapMax
+sudo docker inspect rtm-electrumx-assets --format '{{.HostConfig.Memory}} {{.HostConfig.MemorySwap}}'
+```
+
+Omit the Docker command for a native installation. Earlier installer profiles
+capped backend RAM at 256 MiB (low) or 512 MiB (standard); RTM indexing can exceed
+those limits. Current profiles allow 1024/1536 MiB RAM respectively, each with
+512 MiB additional swap allowance. The small index cache is only part of the
+process's memory use. Swap must already exist on the host.
+
+After pulling and rebuilding the image (or updating the installed native
+environment), update the backend's managed limits with:
+
+```sh
+sudo python3 -S contrib/install_stack.py --reinstall
+```
+
+This retains the saved profile, Core settings, database and ports, and restarts
+the backend with the new limits. Repeat `--config-dir PATH` if it used a custom
+directory. An older installation without complete saved options needs its
+original stack install arguments once. Reinstalling only wallet HTTPS leaves
+backend limits unchanged.
+
 ## Build the extension
 
 In the MetaYoshi checkout:

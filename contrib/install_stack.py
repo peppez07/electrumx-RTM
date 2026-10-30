@@ -32,7 +32,7 @@ def profile(choice,total_ram=None):
             total_ram=2*1024**3
     low=choice == 'low' or (choice == 'auto' and total_ram < 4*1024**3)
     return {'name':'low' if low else 'standard','cache_mb':16 if low else 64,
-            'memory_mib':256 if low else 512,'swap_total_mib':512 if low else 768,
+            'memory_mib':1024 if low else 1536,'swap_total_mib':1536 if low else 2048,
             'cpu_percent':50 if low else 100,'max_sessions':50 if low else 200}
 
 

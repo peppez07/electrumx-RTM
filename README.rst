@@ -184,12 +184,26 @@ building and signing remain in the wallet client. This repository does not
 install a browser-extension wallet. Configure HTTPS/WSS before connecting a
 production wallet, as described below.
 
-The low profile sets a 16 MB index cache, 256 MiB backend RAM limit, 256 MiB
+The low profile sets a 16 MB index cache, 1024 MiB backend RAM limit, 512 MiB
 additional swap allowance, half a CPU and 50 sessions. ``--profile auto`` chooses
-low below 4 GiB host RAM and standard otherwise. The explorer has a separate
-192 MiB Docker memory limit and half-CPU limit. These ceilings do not reserve
+low below 4 GiB host RAM and standard otherwise. The standard profile sets a
+64 MB index cache, 1536 MiB backend RAM limit, 512 MiB additional swap allowance,
+one CPU and 200 sessions. The index cache is only part of backend memory usage;
+block decoding, Python, database and mempool allocations need additional RAM.
+The explorer has a separate 192 MiB Docker memory limit and half-CPU limit.
+These ceilings do not reserve
 RAM; Core and the OS need their own resources. Swap allowance requires swap
 already available on the host; the installer does not create it.
+
+Earlier low/standard profiles limited backend RAM to 256/512 MiB, which can
+cause cgroup out-of-memory kills during RTM indexing even with free host RAM.
+After pulling an update, rerun ``sudo python3 -S contrib/install_stack.py
+--reinstall`` to apply the current limits to an existing managed installation.
+This retains its saved profile, Core configuration, database and ports; an
+HTTPS-only reinstall does not update backend resource limits. See the update
+commands below for rebuilding the image or updating the native environment.
+Installations predating saved full options must repeat their original stack
+install arguments once; do not replace them with guessed default ports or paths.
 
 ``--db-dir PATH`` selects a different fresh database directory. Custom listeners
 use ``--port`` (HTTP), ``--tcp-port``, ``--ws-port``, ``--rpc-port`` (admin RPC)
