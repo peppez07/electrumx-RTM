@@ -1,6 +1,6 @@
-================================
+===========================
 ElectrumX for Raptoreum RTM
-================================
+===========================
 
   :Licence: MIT
   :Language: Python (>= 3.7)
@@ -31,6 +31,339 @@ Features
 * Asset quantities kept separate from RTM amounts. Asset-bearing zero-RTM outputs
   are excluded from native coin selection.
 
+VPS installation: mainnet Core + ElectrumX + explorer
+=====================================================
+
+This guide installs the ElectrumX server and explorer on a Linux VPS running
+systemd, using an **existing Raptoreum mainnet Core** on the same host. It does
+not download, upgrade, restart or reindex Core. A fresh VPS needs Core installed
+and running before completing this guide. Use your normal SSH account with
+``sudo``; root can run the same commands without ``sudo``.
+
+The recommended route is Docker: the repository image pins Python 3.10 and
+includes the native LevelDB build dependencies. This avoids depending on the
+host's Python version for the server. The host only needs standard-library
+Python 3 for provisioning. Ubuntu 22.04/24.04 LTS are suitable host examples;
+choose an official Core binary compatible with your host and CPU architecture.
+
+Use SSD storage with space for the unpruned Core blockchain **and a separate
+ElectrumX index**. Synchronization and indexing need additional working space.
+Check ``df -h``, ``free -h`` and ``swapon --show`` before starting. Small VPS
+instances can use the low profile below; its limits apply to ElectrumX, not to
+Core or the entire VPS. No fixed minimum disk size or full-chain RAM requirement
+has been benchmarked by this project.
+
+1. Prepare the mainnet Core node
+--------------------------------
+
+The implementation is tested against the official
+`Raptoreum Core 2.0.3.01 mainnet release
+<https://github.com/Raptor3um/raptoreum/releases/tag/2.0.3.01-mainnet>`_.
+For a new Core installation, select the binary for your system and verify it
+against the release's ``checksums.txt``. Use mainnet release assets; do not
+substitute a testnet build. Existing working mainnet nodes do not need to be
+reinstalled for this ElectrumX setup.
+
+Core must run with transaction and asset indexes enabled and pruning disabled.
+The following shows the required settings in its actual ``raptoreum.conf``::
+
+    chain=main
+    testnet=0
+    regtest=0
+    server=1
+    txindex=1
+    assetindex=1
+    prune=0
+    rpcbind=127.0.0.1
+    rpcallowip=127.0.0.1
+    rpcconnect=127.0.0.1
+    rpcport=10225
+    rpcuser=rtm_rpc
+    rpcpassword=REPLACE_WITH_A_LONG_RANDOM_SECRET
+
+Replace the password before starting Core; ``openssl rand -hex 32`` can generate
+one. Keep the config readable only by the Core operator and the users who need
+it. The installer requires explicit ``rpcuser``/``rpcpassword`` in this config;
+cookie-only authentication and ``includeconf`` are not supported. Keep RPC bound
+to loopback. No wallet keys or seed phrases belong in the ElectrumX setup.
+
+For an existing Core node, check its current configuration before changing it.
+Enabling missing indexes can require a controlled Core restart and rebuild;
+complete that using Core's procedures. The ElectrumX installer cannot rebuild
+missing Core indexes. Do not delete an existing Core data directory.
+
+Use your installed ``raptoreum-cli`` with the same config and data-directory
+arguments used by your Core service to inspect ``getblockchaininfo``. Core must
+report ``chain: main``. Initial synchronization is complete when
+``initialblockdownload`` is false and ``blocks`` has caught up with ``headers``.
+ElectrumX setup can run while Core is synchronizing: its start timer waits for
+these conditions before launching the backend.
+
+2. Install host tools and Docker
+--------------------------------
+
+On Ubuntu::
+
+    sudo apt-get update
+    sudo apt-get install -y git curl ca-certificates python3 openssl
+
+Install Docker Engine using the
+`official Ubuntu installation guide <https://docs.docker.com/engine/install/ubuntu/>`_.
+If Docker is already installed and working, keep that installation. The Docker
+instructions explain package conflicts; do not mix distribution and Docker
+repository packages. Then verify the daemon::
+
+    sudo systemctl enable --now docker
+    sudo docker version
+    sudo docker run --rm hello-world
+
+The stack uses Docker host networking on Linux so the containers can reach
+Core's localhost RPC. Docker Desktop is not required on the VPS.
+
+3. Download the default branch and build the image
+--------------------------------------------------
+
+On a new checkout::
+
+    sudo git clone --branch master --single-branch \
+        https://github.com/peppez07/electrumx-RTM.git /opt/electrumx-RTM
+    cd /opt/electrumx-RTM
+    sudo docker build -f contrib/Dockerfile -t electrumx-rtm:mainnet .
+
+If that directory already contains this repository, use the update procedure
+below instead of cloning over it. ``master`` is this repository's default branch.
+The image is built from this checkout; it is not pulled from an unrelated image
+publisher. Keep the checkout outside protected home directories when using the
+native service alternative.
+
+4. Configure the complete stack
+-------------------------------
+
+Set these two values for your server. The Core config path below is an example;
+use the file actually read by your running Core service::
+
+    CORE_CONFIG=/var/lib/rtm-mainnet/core/raptoreum.conf
+    PUBLIC_HOST=YOUR_SERVER_IP
+    sudo test -f "$CORE_CONFIG"
+    cd /opt/electrumx-RTM
+
+Preview the service configuration without reading RPC credentials or changing
+the host::
+
+    sudo python3 -S contrib/install_stack.py \
+        --image electrumx-rtm:mainnet \
+        --core-config "$CORE_CONFIG" \
+        --with-explorer --public-host "$PUBLIC_HOST" \
+        --profile low --wallet-api --dry-run
+
+Then run the same command without ``--dry-run``::
+
+    sudo python3 -S contrib/install_stack.py \
+        --image electrumx-rtm:mainnet \
+        --core-config "$CORE_CONFIG" \
+        --with-explorer --public-host "$PUBLIC_HOST" \
+        --profile low --wallet-api
+
+``--wallet-api`` enables HTTP decoding and relay of client-signed transactions.
+Omit it on a fresh install for a read-only HTTP explorer. Keys, transaction
+building and signing remain in the wallet client. This repository does not
+install a browser-extension wallet. Configure HTTPS/WSS before connecting a
+production wallet, as described below.
+
+The low profile sets a 16 MB index cache, 256 MiB backend RAM limit, 256 MiB
+additional swap allowance, half a CPU and 50 sessions. ``--profile auto`` chooses
+low below 4 GiB host RAM and standard otherwise. The explorer has a separate
+192 MiB Docker memory limit and half-CPU limit. These ceilings do not reserve
+RAM; Core and the OS need their own resources. Swap allowance requires swap
+already available on the host; the installer does not create it.
+
+``--db-dir PATH`` selects a different fresh database directory. Custom listeners
+use ``--port`` (HTTP), ``--tcp-port``, ``--ws-port``, ``--rpc-port`` (admin RPC)
+and ``--wss-port``. Ports must be distinct and separate from Core RPC. Record
+these options and repeat them during future setup runs.
+
+Setup creates dedicated service accounts and these files/services:
+
+* ``rtm-electrumx-assets.service`` -- one asset-capable RTM backend.
+* ``rtm-electrumx-assets.timer`` -- retries its startup while Core synchronizes.
+* ``rtm-explorer.service`` -- the web interface and HTTP API.
+* ``/etc/rtm-electrumx/`` -- restricted backend environment, RPC settings and
+  optional TLS copies. ``/opt/rtm-electrumx/core_ready.py`` is the startup gate.
+* ``/etc/rtm-explorer/`` -- restricted explorer environment and minimal Core
+  credential copy. HTTP relay activation is saved here.
+* ``/var/lib/rtm-electrumx/assets-v1`` -- a new, separate ElectrumX database.
+
+**Do not reuse an old coin-only database.** Asset indexing rebuilds from genesis;
+keep old databases separate for rollback. If migrating from a coin-only service,
+stop and disable that specific old service yourself before running the new
+indexer. For an old unit actually named ``rtm-electrumx.service``, that is::
+
+    sudo systemctl disable --now rtm-electrumx.service
+
+Only use that command if it is your obsolete indexer. Do not stop Core or a
+service with an unrelated purpose. The installer rejects unrelated units using
+its managed service names and does not automatically retire other indexers.
+
+5. Check synchronization and open the explorer
+----------------------------------------------
+
+After setup::
+
+    sudo systemctl status rtm-explorer.service --no-pager
+    sudo systemctl list-timers rtm-electrumx-assets.timer --no-pager
+    sudo systemctl status rtm-electrumx-assets.service --no-pager
+    curl -fsS http://127.0.0.1:8080/api/v1/health
+    curl -fsS http://127.0.0.1:8080/api/v1/status | python3 -m json.tool
+
+``health`` confirms the explorer process responds; it does not prove the chain
+is ready. While Core is downloading, an inactive backend with
+``Result=exec-condition`` is expected: the timer checks again about every minute.
+After Core finishes, ElectrumX still needs to build its own index. Do not treat
+that second synchronization stage as an installation failure.
+
+The status response reports ``core_syncing``, ``index_unavailable`` or
+``index_syncing`` until both services agree on the indexed mainnet tip. Wait
+for ``ready: true`` and ``phase: ready`` before checking balances or using coin
+and asset functionality. ``core_unavailable`` means Core RPC could not be read;
+``core_stale: true`` marks last-known progress rather than a current reading.
+
+Open ``http://YOUR_SERVER_IP:8080/`` for the explorer, or
+``http://YOUR_SERVER_IP:8080/#/api`` for the API reference. Check the VPS provider's
+firewall as well as the host firewall. The installer adds an explorer rule only
+when UFW is already active; it does not enable UFW or change provider firewalls.
+Inspect listeners and host rules with::
+
+    sudo ss -lntp
+    sudo ufw status
+
+Default ports:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 14 28 58
+
+   * - TCP port
+     - Service
+     - Exposure
+   * - 8080
+     - Explorer / HTTP API
+     - Public for initial HTTP access; proxy with HTTPS for production.
+   * - 50004
+     - Wallet WSS
+     - Public only when a trusted certificate/key is supplied.
+   * - 50002
+     - Electrum TCP
+     - Loopback; no public firewall rule is needed.
+   * - 50003
+     - Electrum WebSocket
+     - Loopback; can be used behind a TLS WebSocket proxy.
+   * - 8001
+     - ElectrumX admin RPC
+     - Loopback only; never publish this port.
+   * - 10225
+     - Core RPC
+     - Loopback only; never publish this port.
+
+Keep your existing SSH access allowed. Port 10226, if used by your Core node for
+peer connections, is separate from this stack's HTTP/Electrum ports.
+
+6. Add secure wallet and browser access
+---------------------------------------
+
+For direct wallet WSS, obtain a browser-trusted certificate for your domain,
+then rerun the complete setup command with the same settings plus::
+
+    --tls-cert /path/to/fullchain.pem --tls-key /path/to/privkey.pem
+
+This adds ``wss://YOUR_DOMAIN:50004`` and opens 50004 in an already active UFW.
+Also permit that TCP port in the VPS provider firewall. The installer validates
+and copies the pair; it does not obtain or automatically renew certificates.
+After renewal, rerun setup with the updated certificate/key paths to refresh
+the copies and restart the listener. ``--no-tls`` explicitly disables WSS.
+
+For the browser API, configure a trusted HTTPS reverse proxy for your domain
+pointing to ``127.0.0.1:8080``. On a new installation use ``--bind 127.0.0.1``
+with the complete setup command when only the proxy should reach HTTP. The
+proxy's public ports, usually 80/443, need their own firewall rules. Forward
+both ``/api/`` and the UI/static paths. A proxy for the internal 50003 WebSocket
+listener must support WebSocket upgrades, long-lived connections and
+subscription notifications. HTTPS for the explorer does not itself configure
+a wallet WSS endpoint.
+
+If changing bind address or ports on an existing installation, first make the
+matching explicit changes in its managed environment files, then rerun setup
+with the same options. The installer refuses conflicting existing settings.
+``--public-host`` changes the printed URL only; it does not configure DNS or TLS.
+
+7. Update, diagnose or restart
+------------------------------
+
+To update an existing Docker installation, keep your original config path,
+custom ports, database path and binding options. From the checkout::
+
+    cd /opt/electrumx-RTM
+    sudo git pull --ff-only origin master
+    sudo docker build -f contrib/Dockerfile -t electrumx-rtm:mainnet .
+    sudo python3 -S contrib/install_stack.py \
+        --image electrumx-rtm:mainnet \
+        --core-config "$CORE_CONFIG" \
+        --with-explorer --public-host "$PUBLIC_HOST" \
+        --profile low --wallet-api
+
+Set ``CORE_CONFIG`` and ``PUBLIC_HOST`` again when using a new SSH session.
+Repeat all custom options from your initial installation. Reinstalling preserves
+RPC credentials, the selected database, unknown environment settings and copied
+TLS files. Omitting the wallet flags preserves an existing relay choice;
+``--no-wallet-api`` explicitly disables it. Core data is not modified.
+
+Useful logs and checks::
+
+    sudo journalctl -u rtm-explorer.service -n 100 --no-pager
+    sudo journalctl -u rtm-electrumx-assets.service -n 100 --no-pager
+    sudo systemctl status docker --no-pager
+    sudo docker stats --no-stream
+    df -h
+    free -h
+
+If the explorer cannot start, inspect its journal and check for a conflicting
+port or incorrect Docker image. If Core is unavailable, check that Core is
+running and its loopback RPC/config path and credentials match the managed
+copies. Do not paste private environment/config contents into public issues.
+If the asset backend waits, inspect synchronization first. HTTP 503 during sync
+is expected; HTTP 429 means the request limit was reached. Supply/rich-list/
+market-cap aliases return 501 because this server does not build those extra
+statistics indexes.
+
+To restart only the explorer::
+
+    sudo systemctl restart rtm-explorer.service
+
+To retry the backend start condition immediately::
+
+    sudo systemctl start rtm-electrumx-assets.service
+
+Neither command restarts Core. The services and timer are enabled to return
+after a VPS reboot, subject to the same Core synchronization gate.
+
+Native alternative (without Docker)
+-----------------------------------
+
+Use an installed Python 3.10 with matching ``venv`` and development packages,
+plus a compiler and LevelDB headers. For Ubuntu 22.04's Python 3.10::
+
+    sudo apt-get install -y build-essential libleveldb-dev python3.10-venv python3.10-dev
+    cd /opt/electrumx-RTM
+    sudo env PYTHON=/usr/bin/python3.10 VENV_DIR=/opt/rtm-electrumx/venv \
+        sh contrib/install_electrumx.sh --setup --with-explorer \
+        --core-config "$CORE_CONFIG" --public-host "$PUBLIC_HOST" \
+        --profile low --wallet-api
+
+Use this instead of the Docker route, not as a second indexer. The wrapper
+installs this checkout into the isolated environment and configures the same
+services, private listeners and startup gate. ``--explorer`` is a shortcut for
+``--setup --with-explorer``. Running the wrapper without arguments installs the
+Python package only; it does not configure a complete VPS service stack.
+
 Bundled mainnet explorer
 ========================
 
@@ -49,67 +382,11 @@ progress and data APIs return HTTP 503. It does not display partial balances as
 complete results. The installed asset-capable ElectrumX service must use a fresh
 asset database as described below; an old coin-only service cannot serve these pages.
 
-On Linux with systemd, an existing mainnet Core and the prerequisites below,
-install this checkout and automatically configure the explorer::
-
-    sudo sh contrib/install_electrumx.sh --explorer \
-        --core-config /var/lib/rtm-mainnet/core/raptoreum.conf \
-        --public-host YOUR_SERVER_IP
-
-This shortcut installs into ``/opt/rtm-electrumx/venv`` and configures both
-``rtm-electrumx-assets.service`` and ``rtm-explorer.service``. Core must already
-run mainnet with ``txindex=1``, ``assetindex=1`` and ``prune=0``. Setup never
-restarts, downloads, upgrades or reindexes Core. A timer waits for Core to finish
-synchronizing before starting the asset-capable indexer. Stop an obsolete
-coin-only indexer explicitly to avoid two indexers competing for memory; its
-existing database should be preserved.
-
-The complete setup is also available for an existing Docker image::
-
-    sudo python3 contrib/install_stack.py --image electrumx-rtm \
-        --core-config /path/to/raptoreum.conf --with-explorer \
-        --public-host YOUR_SERVER_IP
-
-``sh contrib/install_electrumx.sh --setup --with-explorer`` provides the same
-native service setup. No arguments still performs package installation only.
-Use ``--dry-run`` to inspect setup without reading credentials or changing files.
-The default ``--profile auto`` selects the low profile below 4 GiB RAM: 16 MB
-index cache, 256 MiB backend memory limit, 256 MiB additional swap, half a CPU
-and 50 sessions. ``--profile low`` or ``standard`` chooses explicitly. These are
-service limits; Core and the operating system need additional memory and disk.
-
-Settings live in ``/etc/rtm-electrumx`` and ``/etc/rtm-explorer`` with restricted
-permissions. The backend uses a fresh ``/var/lib/rtm-electrumx/assets-v1`` database;
-``--db-dir`` selects another path. Reinstalling preserves RPC credentials,
-database selection, ports, unknown environment options and configured TLS.
-Repeat any custom port/path options. Conflicting configurations or unrelated
-service units are rejected rather than overwritten.
-
-Private listeners default to TCP 50002, WebSocket 50003 and admin RPC 8001.
-Supply ``--tls-cert CERT --tls-key KEY`` to add public WSS on 50004; the
-installer validates and copies the matching certificate/key. ``--no-tls``
-explicitly disables a previous WSS listener. Certificates are not issued
-automatically. Use a trusted HTTPS reverse proxy for the browser API. The
-explorer defaults to HTTP 8080; active UFW receives a rule for that port
-and optional WSS. Other host/provider firewalls must permit these ports.
-Use ``--port``, ``--tcp-port``, ``--ws-port``, ``--rpc-port`` and ``--wss-port``
-to choose ports. Core and admin RPC remain private.
-
-For an existing installed environment, or the Docker image built below::
-
-    sudo python3 contrib/install_explorer.py --venv /opt/rtm-explorer/venv \
-        --core-config /path/to/raptoreum.conf --public-host YOUR_SERVER_IP
-
-    sudo python3 contrib/install_explorer.py --image electrumx-rtm \
-        --core-config /path/to/raptoreum.conf --public-host YOUR_SERVER_IP
-
-Add ``--dry-run`` to inspect the configuration without changing the host.
-The Docker service uses host networking, an unprivileged container user, a
-read-only filesystem and resource limits. Run it separately from ElectrumX.
-For HTTPS, supply a domain to your reverse proxy, proxy to localhost:8080 and
-configure the explorer with ``--bind 127.0.0.1``. Keep Core and ElectrumX admin RPC
-bound to localhost. The installer does not obtain domain certificates or alter
-provider firewall rules.
+For installation, follow the VPS guide above. The complete stack installer
+creates both the asset-capable ElectrumX backend and this companion explorer.
+``contrib/install_explorer.py`` is an advanced explorer-only installer for an
+already configured backend; its default Electrum port is 50001, while the
+complete stack uses 50002.
 
 For manual/container operation, ``electrumx_explorer`` or
 ``python -m electrumx.explorer`` reads ``EXPLORER_CORE_CONFIG`` (required),
@@ -290,8 +567,8 @@ Reuse cursors on the same connection; restart pagination if the indexed tip or
 mempool generation changes. Error ``-32001`` indicates that the client should
 retry after synchronization or restart stale pagination.
 
-Mainnet setup
-=============
+Manual installation reference
+=============================
 
 Install this checkout
 ---------------------
