@@ -6,6 +6,8 @@ ElectrumX for Raptoreum RTM
   :Language: Python (>= 3.7)
   :Original Author: Neil Booth
 
+**GitHub project:** `peppez07/electrumx-RTM <https://github.com/peppez07/electrumx-RTM>`_
+
 An Electrum protocol server for Raptoreum mainnet, with native RTM coin indexing
 and an additive asset extension. It connects to a Raptoreum Core full node and
 indexes transactions for efficient wallet queries.
