@@ -187,3 +187,38 @@ def test_electrumx_alone_still_requires_unpruned_mainnet(tmp_path,replacement):
     source.write_text(source.read_text().replace(*replacement))
     with pytest.raises(ValueError):
         installer.stage(args,123,456)
+
+
+def test_https_runs_beside_core_without_txindex_or_explorer(tmp_path):
+    installer=module();args=options(tmp_path,'--wallet-https','--public-host','144.202.18.233','--agree-acme-tos')
+    source=Path(args.core_config)
+    source.write_text(source.read_text().replace('txindex=1','txindex=0').replace('assetindex=1','assetindex=0'))
+    result=installer.stage(args,123,456)
+    assert result['wallet_https_url'] == 'https://144.202.18.233/api/v1/electrum'
+    assert result['explorer_url'] is None and result['core_txindex'] is False
+    https_args=installer.wallet_https_options(args)
+    assert https_args.electrum_port == 50002 and https_args.explorer_port == 0
+    assert https_args.agree_acme_tos
+
+
+def test_reinstall_restores_selected_stack_ports_paths_and_https(tmp_path):
+    installer=module();args=options(tmp_path,'--wallet-https','--public-host','144.202.18.233',
+        '--agree-acme-tos','--tcp-port','51002','--ws-port','51003','--rpc-port','8101',
+        '--gateway-port','8190','--with-explorer','--port','8180')
+    installer.stage(args,123,456)
+    restored=installer.parse_options(['--reinstall','--config-dir',args.config_dir])
+    assert restored.image == 'rtm:test' and restored.wallet_https and restored.with_explorer
+    assert restored.core_config == args.core_config and restored.db_dir == args.db_dir
+    assert restored.tcp_port == 51002 and restored.ws_port == 51003 and restored.rpc_port == 8101
+    assert restored.gateway_port == 8190 and restored.port == 8180 and restored.agree_acme_tos
+    assert installer.wallet_https_options(restored).explorer_port == 8180
+    installer.stage(restored,123,456)
+
+
+def test_https_gateway_cannot_take_core_or_private_service_ports(tmp_path):
+    installer=module();args=options(tmp_path,'--wallet-https','--public-host','144.202.18.233')
+    for port in (50002,8001,10225,80,443):
+        args.gateway_port=port
+        with pytest.raises(ValueError):
+            installer.stage(args,123,456)
+    assert not Path(args.config_dir).exists()

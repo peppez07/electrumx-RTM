@@ -19,6 +19,8 @@ SERVICE='rtm-electrumx-assets.service'
 TIMER='rtm-electrumx-assets.timer'
 spec=importlib.util.spec_from_file_location('rtm_config',ROOT/'electrumx/explorer/config.py')
 config_module=importlib.util.module_from_spec(spec);spec.loader.exec_module(config_module)
+https_spec=importlib.util.spec_from_file_location('rtm_wallet_https',ROOT/'contrib/install_wallet_https.py')
+https_module=importlib.util.module_from_spec(https_spec);https_spec.loader.exec_module(https_module)
 
 
 def profile(choice,total_ram=None):
@@ -36,9 +38,10 @@ def profile(choice,total_ram=None):
 
 def parser():
     p=argparse.ArgumentParser(description=__doc__)
-    mode=p.add_mutually_exclusive_group(required=True)
+    mode=p.add_mutually_exclusive_group()
     mode.add_argument('--image',help='Existing local Docker image built from this checkout')
     mode.add_argument('--venv',help='Existing installed Python environment, preferably under /opt')
+    p.add_argument('--reinstall',action='store_true',help='Restore complete saved install options')
     p.add_argument('--core-config',default='/var/lib/rtm-mainnet/core/raptoreum.conf')
     p.add_argument('--config-dir',default='/etc/rtm-electrumx')
     p.add_argument('--runtime-dir',default='/opt/rtm-electrumx')
@@ -55,6 +58,11 @@ def parser():
     p.add_argument('--port',type=int,default=8080,help='Explorer HTTP port')
     p.add_argument('--bind',choices=['0.0.0.0','127.0.0.1'],default='0.0.0.0',help='Explorer bind address')
     p.add_argument('--public-host')
+    p.add_argument('--wallet-https',action='store_true',help='Install trusted password-free wallet HTTPS on 443')
+    p.add_argument('--gateway-port',type=int,default=8090)
+    p.add_argument('--https-config-dir',default='/etc/rtm-wallet-http')
+    p.add_argument('--agree-acme-tos',action='store_true',help="Accept Let's Encrypt terms for wallet HTTPS")
+    p.add_argument('--email',help='Optional ACME contact email')
     wallet=p.add_mutually_exclusive_group()
     wallet.add_argument('--wallet-api',dest='wallet_api',action='store_const',const=True)
     wallet.add_argument('--no-wallet-api',dest='wallet_api',action='store_const',const=False)
@@ -63,7 +71,41 @@ def parser():
     return p
 
 
+def parse_options(argv=None):
+    argv=list(sys.argv[1:] if argv is None else argv)
+    p=parser();args=p.parse_args(argv)
+    if args.reinstall:
+        try:
+            saved=json.loads((Path(args.config_dir)/'installation.json').read_text())
+            p.set_defaults(**saved['options'])
+        except (OSError,KeyError,TypeError,ValueError) as error:
+            raise ValueError('No complete saved installation; repeat the original install options once.') from error
+        args=p.parse_args(argv)
+        if '--image' in argv:args.venv=None
+        if '--venv' in argv:args.image=None
+    validate(args)
+    return args
+
+
+def wallet_https_argv(args):
+    options=['--image',args.image] if args.image else ['--venv',args.venv]
+    options+=['--public-host',args.public_host or '', '--electrum-port',str(args.tcp_port),
+              '--gateway-port',str(args.gateway_port),'--explorer-port',str(args.port if args.with_explorer else 0),
+              '--config-dir',args.https_config_dir]
+    if args.agree_acme_tos:options+=['--agree-acme-tos']
+    if args.email:options+=['--email',args.email]
+    # On subsequent runs the HTTPS installer also restores its certificate paths.
+    if (Path(args.https_config_dir)/'installation.json').exists():options.insert(0,'--reinstall')
+    return options
+
+
+def wallet_https_options(args):
+    return https_module.parse_options(wallet_https_argv(args))
+
+
 def validate(args):
+    if bool(args.image) == bool(args.venv):
+        raise ValueError('Select --image or --venv, or use --reinstall for a saved installation.')
     ports=[args.tcp_port,args.ws_port,args.rpc_port]
     if bool(args.tls_cert) != bool(args.tls_key):
         raise ValueError('Supply both --tls-cert and --tls-key.')
@@ -71,9 +113,12 @@ def validate(args):
         raise ValueError('Do not combine TLS paths and --no-tls.')
     if args.tls_cert:ports.append(args.wss_port)
     if args.with_explorer:ports.append(args.port)
+    if args.wallet_https:
+        ports.extend((80,443,args.gateway_port))
+        wallet_https_options(args)
     if any(not 1 <= n <= 65535 for n in ports) or len(set(ports)) != len(ports):
         raise ValueError('Service ports must be valid and distinct.')
-    for value in (args.core_config,args.config_dir,args.runtime_dir,args.db_dir,args.systemd_dir,args.venv or ''):
+    for value in (args.core_config,args.config_dir,args.runtime_dir,args.db_dir,args.systemd_dir,args.https_config_dir,args.venv or ''):
         if any(ord(c) < 32 or c in '"%' for c in value):
             raise ValueError('Paths cannot contain control characters, quotes or percent signs.')
     if args.image and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:/@-]*',args.image):
@@ -92,7 +137,8 @@ def summary(args):
         'cache_mb':limits['cache_mb'],'backend_memory_mib':limits['memory_mib'],
         'waits_for_core_sync':True,'db_directory':str(Path(args.db_dir).resolve()),
         'tcp_port':args.tcp_port,'ws_port':args.ws_port,
-        'explorer_url':'http://{}:{}/'.format(args.public_host or 'SERVER_IP',args.port) if args.with_explorer else None}
+        'explorer_url':'http://{}:{}/'.format(args.public_host or 'SERVER_IP',args.port) if args.with_explorer else None,
+        'wallet_https_url':'https://'+args.public_host+'/api/v1/electrum' if args.wallet_https else None}
 
 
 def unit_text(args,uid,gid):
@@ -139,6 +185,7 @@ def owned(path):
 
 def stage(args,uid,gid):
     validate(args)
+    if args.wallet_https:https_module.check_files(wallet_https_options(args))
     core=config_module.load_core_config(args.core_config)
     settings=config_module.read_core_settings(args.core_config)
     enabled=lambda key:settings.get(key,'0').lower() in ('1','true')
@@ -150,7 +197,8 @@ def stage(args,uid,gid):
         raise ValueError('The explorer requires Core txindex=1 and assetindex=1; configure/reindex Core explicitly or install without --with-explorer.')
     if settings.get('prune','0').lower() not in ('0','false'):
         raise ValueError('Core must be unpruned (prune=0).')
-    if urlsplit(core['url']).port in (args.tcp_port,args.ws_port,args.rpc_port,args.port if args.with_explorer else 0):
+    if urlsplit(core['url']).port in (args.tcp_port,args.ws_port,args.rpc_port,args.port if args.with_explorer else 0,
+                                     args.gateway_port if args.wallet_https else 0):
         raise ValueError('An ElectrumX/explorer port conflicts with Core RPC.')
     units=Path(args.systemd_dir);config=Path(args.config_dir);runtime=Path(args.runtime_dir);data=Path(args.db_dir)
     if any(not owned(units/name) for name in (SERVICE,TIMER)):
@@ -219,13 +267,18 @@ def stage(args,uid,gid):
     # Without txindex, standard blockchain.transaction.get serves only mempool
     # transactions; MetaYoshi uses blockchain.transaction.get_in_block instead.
     result['core_txindex']=enabled('txindex')
-    manifest.write_text(json.dumps(result,indent=2)+'\n');manifest.chmod(0o640)
+    saved={key:value for key,value in vars(args).items() if key not in ('reinstall','dry_run')}
+    saved['profile']=limits['name']
+    if tls_cert:
+        saved.update(tls_cert=str(config/'tls.crt'),tls_key=str(config/'tls.key'))
+    manifest_data=dict(result,options=saved)
+    https_module.atomic_write(manifest,json.dumps(manifest_data,indent=2)+'\n',0o640)
     return result
 
 
 def main(argv=None):
-    p=parser();args=p.parse_args(argv)
-    try:validate(args)
+    p=parser()
+    try:args=parse_options(argv)
     except ValueError as error:p.error(str(error))
     if args.dry_run:
         print(json.dumps(summary(args)));return 0
@@ -233,6 +286,9 @@ def main(argv=None):
         p.error('Service setup requires Linux systemd and root; use --dry-run elsewhere.')
     if Path(args.systemd_dir).resolve() != Path('/etc/systemd/system'):
         p.error('Live installation must use the system service directory.')
+    if args.wallet_https:
+        try:https_module.preflight(wallet_https_options(args))
+        except (OSError,ValueError,subprocess.SubprocessError) as error:p.error(str(error))
     # Prove installation before provisioning accounts or service files.
     smoke=('from electrumx.lib.coins import Raptoreum; '
         'from electrumx.server.raptoreum_db import SCHEMA_VERSION; assert SCHEMA_VERSION == b"2"; '
@@ -274,6 +330,8 @@ def main(argv=None):
         if args.public_host:options+=['--public-host',args.public_host]
         if args.wallet_api is not None:options+=['--wallet-api' if args.wallet_api else '--no-wallet-api']
         subprocess.run([sys.executable,str(ROOT/'contrib/install_explorer.py'),*options],check=True)
+    if args.wallet_https:
+        subprocess.run([sys.executable,str(ROOT/'contrib/install_wallet_https.py'),*wallet_https_argv(args)],check=True)
     if result.get('wss_port'):
         ufw=shutil.which('ufw')
         if ufw:

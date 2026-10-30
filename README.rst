@@ -704,13 +704,97 @@ method relays both RTM coin and asset transactions to Core for validation. The
 explorer's HTTP data routes are separate from the wallet's Electrum connection;
 the opt-in HTTP wallet relay offers the same client-signing boundary.
 
-Extensions connect using WebSocket; a production public endpoint should use
-``wss`` with a browser-trusted TLS certificate. ElectrumX supports ``ws`` and
+MetaYoshi supports the password-free HTTPS endpoint below and existing WebSocket
+servers. Public connections require a browser-trusted certificate. ElectrumX supports ``ws`` and
 ``wss`` services through ``SERVICES``. For example, an internal
 ``ws://127.0.0.1:50003`` listener can sit behind a TLS reverse proxy. Direct WSS
 requires ``SSL_CERTFILE`` and ``SSL_KEYFILE``. Configure the proxy for WebSocket
 upgrades, persistent connections and subscription notifications. A reachable
 explorer URL does not imply that a public wallet WSS endpoint is configured.
+
+Password-free wallet HTTPS
+--------------------------
+
+The standalone gateway exposes public Electrum JSON-RPC at
+``https://144.202.18.233/api/v1/electrum`` (replace the IP for another server).
+The wallet signs locally and sends only public chain requests or signed raw
+transactions. No wallet password, seed, private key or Core RPC credentials go
+to this endpoint. Nginx terminates trusted TLS on port 443; a dedicated gateway
+connects to the existing loopback Electrum TCP listener on port 50002. It cannot
+call Core RPC or Electrum administrative methods. POST requests, including
+broadcasts, are never automatically retried by nginx or the gateway.
+
+Use the VPS provider's web console or another already authorized administration
+channel. On Debian/Ubuntu with an existing ElectrumX indexer, this command adds
+HTTPS without restarting the indexer or Core::
+
+    cd /opt/electrumx-RTM
+    sudo git pull --ff-only
+    sudo docker build -f contrib/Dockerfile -t electrumx-rtm:mainnet .
+    sudo python3 -S contrib/install_wallet_https.py \
+        --image electrumx-rtm:mainnet --public-host 144.202.18.233 \
+        --electrum-port 50002 --agree-acme-tos
+
+Before running it, allow inbound TCP **80 and 443** in the Vultr/provider
+firewall. The installer opens those ports in an active UFW firewall. Port 80
+must remain reachable for certificate renewal. A domain may replace the public
+IPv4; its DNS must resolve to this server. Existing unrelated services or nginx
+sites using 80/443 cause an actionable refusal; their files are preserved. The
+installer requires a dedicated nginx listener and removes only the default
+symlink created by a fresh nginx package installation.
+
+``--agree-acme-tos`` explicitly accepts the
+`Let's Encrypt terms <https://letsencrypt.org/repository/>`_; issuance is refused
+without it. Add ``--email you@example.com`` for an ACME contact address, or
+preview without accepting terms or changing files by adding ``--dry-run``.
+The installer provisions nginx, Python venv support and an isolated Certbot
+5.4+ environment from official PyPI. Public IP certificates use Let's Encrypt's
+``shortlived`` profile. A systemd timer checks renewal every 12 hours and reloads
+nginx after a successful renewal; keep the timer enabled. The same certificate
+lineage is reused while its certificate remains valid.
+
+For an existing local explorer, add ``--explorer-port 8080`` to provide public
+sync status. Omit it to disable the optional status source. HTTPS itself does
+not require the explorer, Core ``txindex`` or ``assetindex``. Repeat any custom
+Electrum port; ``--gateway-port`` changes the private HTTP listener (default
+``127.0.0.1:8090``). Native installations may use ``--venv /opt/rtm/venv``
+instead of ``--image``. The environment must contain this updated checkout.
+
+For a new complete stack, add ``--wallet-https --agree-acme-tos`` and
+``--public-host 144.202.18.233`` to ``install_stack.py``. Add
+``--with-explorer`` only if the explorer and its Core indexes are wanted.
+Both installers persist their complete public, nonsecret selected options in
+their ``installation.json`` files. Subsequent updates retain the selected host,
+ports, Core config, database and certificate paths::
+
+    cd /opt/electrumx-RTM
+    sudo git pull --ff-only
+    sudo docker build -f contrib/Dockerfile -t electrumx-rtm:mainnet .
+    # Update HTTPS alone; leave the running indexer undisturbed:
+    sudo python3 -S contrib/install_wallet_https.py --reinstall
+    # Or update a complete stack originally installed with --wallet-https:
+    sudo python3 -S contrib/install_stack.py --reinstall
+
+If a custom config directory was selected, repeat ``--config-dir PATH`` with
+``--reinstall``. Older stack manifests without saved options require the
+original install arguments once; later updates can use ``--reinstall``. Keep
+service customizations in systemd drop-ins, which the installers preserve.
+Changing a saved public host or certificate identity requires an explicit new
+installation with separate managed paths; it cannot silently reuse the old
+certificate configuration.
+
+The installer checks local gateway health and the HTTPS endpoint with normal
+certificate and hostname verification. ``/api/v1/health`` reports gateway
+liveness even during initial sync; it does not certify wallet readiness. Chain
+requests may return retry error ``-32001`` until ElectrumX is synchronized.
+Inspect service and renewal status with::
+
+    sudo systemctl status rtm-wallet-http.service rtm-wallet-cert-renew.timer
+    sudo journalctl -u rtm-wallet-http.service -n 50 --no-pager
+    curl --fail https://144.202.18.233/api/v1/health
+
+An offline dry-run, staged files and syntax checks do not prove public ACME
+reachability, provider firewall configuration or a live server installation.
 
 Browser-compatible transport tests exercise coin and asset request dispatch
 over a real local WebSocket connection using offline fixtures; no transaction
