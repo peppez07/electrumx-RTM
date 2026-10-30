@@ -27,3 +27,13 @@ const {formatBytes} = require("../../electrumx/explorer/static/app.js");
 assert.equal(formatBytes(1024), "1 KiB");
 assert.equal(formatBytes(0), "0 B");
 assert.equal(formatBytes(null), "Unavailable");
+
+{
+  const {indexProgress} = require('../../electrumx/explorer/static/app.js');
+  const syncing = indexProgress({electrumx: {initial_sync: true, indexed_height: 231995, target_height: 1461952}});
+  assert.equal(syncing.percent.toFixed(2), '15.87');
+  assert.equal(syncing.label, '15.87% indexed · 231,995 of 1,461,952 blocks');
+  assert.equal(indexProgress({electrumx: {ready: true, indexed_height: 5}}), null);
+  assert.equal(indexProgress({}), null);
+  console.log('UI index progress: passed');
+}

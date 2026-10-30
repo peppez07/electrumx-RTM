@@ -22,6 +22,13 @@ function progressLabel(core) {
   const value = typeof raw==='number' || (typeof raw==='string' && raw.trim()!=='') ? Number(raw) : NaN;
   return Number.isFinite(value) ? (Math.max(0,Math.min(1,value))*100).toFixed(3)+'%' : 'Unavailable';
 }
+function indexProgress(status) {
+  const index = (status && status.electrumx) || {};
+  const done = Number(index.indexed_height), target = Number(index.target_height);
+  if (!index.initial_sync || !Number.isFinite(done) || !Number.isFinite(target) || target <= 0) return null;
+  const percent = Math.max(0, Math.min(100, done/target*100));
+  return {percent, label: percent.toFixed(2)+'% indexed · '+done.toLocaleString('en-US')+' of '+target.toLocaleString('en-US')+' blocks'};
+}
 function refreshDelay(failures) { return Math.min(240000,60000 * 2**failures); }
 function formatBytes(value) {
   if (typeof value!=='number' || !Number.isFinite(value) || value<0) return 'Unavailable';
@@ -29,7 +36,7 @@ function formatBytes(value) {
   while(value>=1024 && unit<units.length-1) { value/=1024;unit++; }
   return Number(value.toFixed(1)).toLocaleString('en-US')+' '+units[unit];
 }
-if (typeof module !== 'undefined') module.exports = {escapeHTML, formatAtomic, loadAssetData, progressLabel, refreshDelay, formatBytes};
+if (typeof module !== 'undefined') module.exports = {escapeHTML, formatAtomic, loadAssetData, progressLabel, indexProgress, refreshDelay, formatBytes};
 if (typeof document !== 'undefined') {
   const e = escapeHTML, enc = encodeURIComponent, $ = id => document.getElementById(id);
   let currentStatus = null, generation = 0, refreshing = false, pollTimer, failures = 0;
@@ -98,16 +105,18 @@ if (typeof document !== 'undefined') {
     $('strip-status').textContent = status.ready ? `Block #${integer(core.blocks)} · Connected` : `${status.core_stale ? 'Last known' : status.phase==='core_unavailable' ? 'Core unavailable' : 'Synchronizing'} · ${integer(core.blocks)} blocks`;
     $('refresh-info').textContent = `${status.core_stale ? 'Last Core response' : 'Checked'} ${status.core_checked_at ? new Date(status.core_checked_at*1000).toLocaleTimeString() : '—'} · 60s refresh`;
     if (status.ready) { $('sync-banner').innerHTML = ''; return; }
-    const progress = progressLabel(core), percent = progress==='Unavailable' ? null : parseFloat(progress);
+    const progress = progressLabel(core), indexing = indexProgress(status);
+    // Once Core is synchronized, the bar tracks the asset index rather than Core's 100%.
+    const percent = indexing ? indexing.percent : progress==='Unavailable' ? null : parseFloat(progress);
     const label = {core_syncing:'Raptoreum Core is synchronizing', index_syncing:'The ElectrumX asset index is catching up', index_unavailable:'Waiting for the ElectrumX asset service', core_unavailable:'Waiting for Raptoreum Core', wrong_network:'Mainnet connection required'}[status.phase] || 'Connecting to the network';
-    $('sync-banner').innerHTML = `<div class="banner"><div class="banner-symbol">◷</div><div><strong>${e(label)}</strong><p>Balances and transaction data become available after Core and the asset index are synchronized.</p>${percent===null ? '' : `<progress max="100" value="${percent}"></progress>`}<small>${e(progress)} verified${status.core_stale ? ' (last known; connection unavailable)' : ''} · ${integer(core.blocks)} blocks processed · ${integer(core.headers)} headers${index.indexed_height !== undefined ? ` · Index ${integer(index.indexed_height)}` : ''}</small></div></div>`;
+    $('sync-banner').innerHTML = `<div class="banner"><div class="banner-symbol">◷</div><div><strong>${e(label)}</strong><p>Balances and transaction data become available after Core and the asset index are synchronized.</p>${percent===null ? '' : `<progress max="100" value="${percent}"></progress>`}<small>${indexing ? e(indexing.label)+' · ' : ''}${e(progress)} verified${status.core_stale ? ' (last known; connection unavailable)' : ''} · ${integer(core.blocks)} blocks processed · ${integer(core.headers)} headers${index.indexed_height !== undefined ? ` · Index ${integer(index.indexed_height)}` : ''}</small></div></div>`;
   }
 
   function stats(status) {
     const core = status.core || {}, index = status.electrumx || {};
     return `<div class="card stats">${[
       ['Latest block', integer(core.blocks), status.ready ? 'Core synchronized' : 'Blocks processed so far'],
-      ['Asset index', integer(index.indexed_height), index.ready ? 'Indexed and ready' : 'Waiting for synchronization'],
+      ['Asset index', integer(index.indexed_height), index.ready ? 'Indexed and ready' : indexProgress(status)?.label || 'Waiting for synchronization'],
       ['Network status', status.ready ? 'Connected' : status.phase==='core_unavailable' ? 'Unavailable' : 'Syncing', status.core_stale ? 'Last known Core data' : 'Progress updates automatically']
     ].map(([label,value,note]) => `<div class="stat"><div class="stat-label">${label}</div><div class="stat-value">${value}</div><div class="stat-note">${note}</div></div>`).join('')}</div>`;
   }
