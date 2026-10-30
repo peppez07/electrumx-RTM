@@ -106,7 +106,10 @@ class Explorer:
         async with self.status_lock:
             if not fresh and self.cached_status and time.monotonic()-self.checked < self.status_ttl:
                 return self.cached_status
-            result = {'network': 'mainnet', 'ready': False, 'phase': 'core_unavailable',
+            # core_ready: Core-backed data (blocks, transactions, assets) can be served.
+            # index_ready/ready: ElectrumX-backed address data can be served too.
+            result = {'network': 'mainnet', 'ready': False, 'core_ready': False,
+                      'index_ready': False, 'phase': 'core_unavailable',
                       'core': dict(self.last_core), 'core_stale': bool(self.last_core),
                       'core_checked_at': self.core_checked_at, 'electrumx': {'ready': False},
                       'checked_at': int(time.time())}
@@ -125,6 +128,7 @@ class Explorer:
                       info.get('blocks', -1) < info.get('headers', 0)):
                     result['phase'] = 'core_syncing'
                 else:
+                    result['core_ready'] = True
                     result['phase'] = 'index_unavailable'
                     try:
                         features = await self.electrum.call('server.features')
@@ -140,6 +144,7 @@ class Explorer:
                     result['ready'] = bool(assets.get('ready') is True and
                         assets.get('indexed_height') == info.get('blocks') and
                         assets.get('indexed_tip') == info.get('bestblockhash'))
+                    result['index_ready'] = result['ready']
                     result['phase'] = 'ready' if result['ready'] else 'index_syncing'
             except BackendError:
                 pass
@@ -156,10 +161,14 @@ class Explorer:
                 'target_height': target,
                 'percent': round(100*progress['indexed_height']/target, 2) if target else 0}
 
-    async def gate(self, fresh=False):
+    async def gate(self, fresh=False, index=False):
+        '''Core-backed routes need only a synchronized Core. Routes that read the
+        ElectrumX address index (index=True) also need the index to match Core.'''
         status = await self.status(fresh=fresh)
-        if not status['ready']:
-            message = 'Chain data is unavailable until Core and the asset index synchronize.'
+        if not status['core_ready']:
+            raise APIError(503, 'synchronizing', 'Chain data is unavailable until Raptoreum Core synchronizes.')
+        if index and not status['ready']:
+            message = 'Address data is unavailable until the ElectrumX index synchronizes.'
             index = status.get('electrumx') or {}
             if index.get('initial_sync'):
                 message += ' ElectrumX has indexed {:,} of {:,} blocks ({}%).'.format(
@@ -277,7 +286,7 @@ class Explorer:
                               'next_offset': offset+limit if len(ids) > offset+limit else None})
 
     async def address(self, request):
-        await self.gate()
+        await self.gate(index=True)
         address = request.match_info['address']
         scripthash = address_hash(address)
         balance = await self.electrum.call('blockchain.scripthash.get_balance', [scripthash])
@@ -285,7 +294,7 @@ class Explorer:
             'balance': {k: str(balance[k]) for k in ('confirmed', 'unconfirmed')}})
 
     async def address_records(self, request):
-        await self.gate()
+        await self.gate(index=True)
         scripthash = address_hash(request.match_info['address'])
         limit, offset = pagination(request)
         mode = request.match_info['mode']
@@ -303,7 +312,7 @@ class Explorer:
         return json_response(result)
 
     async def address_assets(self, request):
-        await self.gate()
+        await self.gate(index=True)
         scripthash = address_hash(request.match_info['address'])
         limit = number(request.query.get('limit'), default=25, maximum=100, minimum=1)
         cursor = request.query.get('cursor') or None

@@ -379,11 +379,14 @@ a responsive layout, dark mode, copy buttons, public read APIs and opt-in non-cu
 private keys are required. Metadata is displayed as text; external content is
 not fetched automatically.
 
-The explorer uses local Core RPC for blocks, transactions and the asset directory,
-and local ElectrumX for address and asset queries. Both must index the same
-mainnet tip. While Core or the asset index is synchronizing, the site displays
-progress and data APIs return HTTP 503. It does not display partial balances as
-complete results. The installed asset-capable ElectrumX service must use a fresh
+The explorer uses local Core RPC for blocks, transactions, the asset directory,
+holders and the signed-transaction relay, and local ElectrumX only for address
+balances, history and address assets. The two are independent: once Core is
+synchronized, Core-backed pages and APIs work even while ElectrumX is still
+building its index (``/api/v1/status`` reports ``core_ready`` and
+``index_ready`` separately, plus index progress). Address routes return HTTP 503
+until the ElectrumX index matches Core's tip, so partial balances are never
+shown as complete results. The installed asset-capable ElectrumX service must use a fresh
 asset database as described below; an old coin-only service cannot serve these pages.
 
 For installation, follow the VPS guide above. The complete stack installer

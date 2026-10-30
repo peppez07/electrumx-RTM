@@ -34,6 +34,7 @@ class WalletAPI:
     async def capabilities(self, request):
         status = await self.explorer.status()
         return json_response({'version':1, 'network':'mainnet', 'ready':status['ready'],
+            'relay_ready':status['core_ready'] and self.enabled,
             'signing':'client_only', 'transaction_building':'client_only',
             'asset_types':['root', 'subasset', 'unique'], 'asset_destinations':['p2pkh'],
             'future_outputs_selectable':status['electrumx'].get('future_outputs_selectable') is True,
@@ -96,6 +97,7 @@ class WalletAPI:
 
     async def fees(self, request):
         blocks = number(request.query.get('blocks'), default=6, minimum=1, maximum=1000)
+        await self.explorer.gate(index=True)
         estimate = Decimal(str(await self.explorer.electrum.call('blockchain.estimatefee', [blocks])))
         relay = Decimal(str(await self.explorer.electrum.call('blockchain.relayfee')))
         if not estimate.is_finite() or not relay.is_finite() or relay < 0:

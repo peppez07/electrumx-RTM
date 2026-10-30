@@ -22,6 +22,10 @@ function progressLabel(core) {
   const value = typeof raw==='number' || (typeof raw==='string' && raw.trim()!=='') ? Number(raw) : NaN;
   return Number.isFinite(value) ? (Math.max(0,Math.min(1,value))*100).toFixed(3)+'%' : 'Unavailable';
 }
+/** Core-backed pages (blocks, transactions, assets) work once Core is synchronized. */
+function coreReady(status) {
+  return Boolean(status && (status.ready === true || status.core_ready === true));
+}
 function indexProgress(status) {
   const index = (status && status.electrumx) || {};
   const done = Number(index.indexed_height), target = Number(index.target_height);
@@ -36,7 +40,7 @@ function formatBytes(value) {
   while(value>=1024 && unit<units.length-1) { value/=1024;unit++; }
   return Number(value.toFixed(1)).toLocaleString('en-US')+' '+units[unit];
 }
-if (typeof module !== 'undefined') module.exports = {escapeHTML, formatAtomic, loadAssetData, progressLabel, indexProgress, refreshDelay, formatBytes};
+if (typeof module !== 'undefined') module.exports = {escapeHTML, formatAtomic, loadAssetData, progressLabel, coreReady, indexProgress, refreshDelay, formatBytes};
 if (typeof document !== 'undefined') {
   const e = escapeHTML, enc = encodeURIComponent, $ = id => document.getElementById(id);
   let currentStatus = null, generation = 0, refreshing = false, pollTimer, failures = 0;
@@ -102,14 +106,14 @@ if (typeof document !== 'undefined') {
   function updateStatus(status) {
     currentStatus = status;
     const core = status.core || {}, index = status.electrumx || {};
-    $('strip-status').textContent = status.ready ? `Block #${integer(core.blocks)} · Connected` : `${status.core_stale ? 'Last known' : status.phase==='core_unavailable' ? 'Core unavailable' : 'Synchronizing'} · ${integer(core.blocks)} blocks`;
+    $('strip-status').textContent = status.ready ? `Block #${integer(core.blocks)} · Connected` : coreReady(status) ? `Block #${integer(core.blocks)} · Address index syncing` : `${status.core_stale ? 'Last known' : status.phase==='core_unavailable' ? 'Core unavailable' : 'Synchronizing'} · ${integer(core.blocks)} blocks`;
     $('refresh-info').textContent = `${status.core_stale ? 'Last Core response' : 'Checked'} ${status.core_checked_at ? new Date(status.core_checked_at*1000).toLocaleTimeString() : '—'} · 60s refresh`;
     if (status.ready) { $('sync-banner').innerHTML = ''; return; }
     const progress = progressLabel(core), indexing = indexProgress(status);
     // Once Core is synchronized, the bar tracks the asset index rather than Core's 100%.
     const percent = indexing ? indexing.percent : progress==='Unavailable' ? null : parseFloat(progress);
     const label = {core_syncing:'Raptoreum Core is synchronizing', index_syncing:'The ElectrumX asset index is catching up', index_unavailable:'Waiting for the ElectrumX asset service', core_unavailable:'Waiting for Raptoreum Core', wrong_network:'Mainnet connection required'}[status.phase] || 'Connecting to the network';
-    $('sync-banner').innerHTML = `<div class="banner"><div class="banner-symbol">◷</div><div><strong>${e(label)}</strong><p>Balances and transaction data become available after Core and the asset index are synchronized.</p>${percent===null ? '' : `<progress max="100" value="${percent}"></progress>`}<small>${indexing ? e(indexing.label)+' · ' : ''}${e(progress)} verified${status.core_stale ? ' (last known; connection unavailable)' : ''} · ${integer(core.blocks)} blocks processed · ${integer(core.headers)} headers${index.indexed_height !== undefined ? ` · Index ${integer(index.indexed_height)}` : ''}</small></div></div>`;
+    $('sync-banner').innerHTML = `<div class="banner"><div class="banner-symbol">◷</div><div><strong>${e(label)}</strong><p>${coreReady(status) ? 'Blocks, transactions and assets are available now. Address balances and history appear when the ElectrumX index catches up.' : 'Balances and transaction data become available after Core and the asset index are synchronized.'}</p>${percent===null ? '' : `<progress max="100" value="${percent}"></progress>`}<small>${indexing ? e(indexing.label)+' · ' : ''}${e(progress)} verified${status.core_stale ? ' (last known; connection unavailable)' : ''} · ${integer(core.blocks)} blocks processed · ${integer(core.headers)} headers${index.indexed_height !== undefined ? ` · Index ${integer(index.indexed_height)}` : ''}</small></div></div>`;
   }
 
   function stats(status) {
@@ -261,7 +265,7 @@ if (typeof document !== 'undefined') {
       ['project','Basic Raptoreum project identity.'],
       ['supply · marketcap · getrichlist','HTTP 501/not_indexed: these require separate statistics and market-data indexes.']
     ];
-    return heading('Explorer API','RTM data and client-signed transaction relay · v1') + `<div class="card api-intro"><h3>Build on Raptoreum</h3><p class="muted">Base URL: <code>${e(location.origin)}/api/v1/</code>. Data routes use GET and return JSON. No API key is required. The default limit is 120 requests per minute per connecting IP; overloaded requests return 429 or 503 with Retry-After. Browser CORS/preflight is supported without cookies.</p><p class="muted">Coin and asset atomic quantities are decimal strings (100,000,000 units = 1 RTM or asset unit). Keep strings or use arbitrary-precision arithmetic. Core metadata quantities retain their source units; decimal JSON numbers are strings.</p><p class="muted">Data routes return 503 until Core and the asset index match. Status and capability routes remain available during sync. Invalid inputs return 400, missing data 404 and unavailable backends 502/503. Asset cursors expire on chain/mempool changes or a backend reconnection: restart the first page. Pages accept up to 100 items (25 for blocks and transaction summaries); offsets stop at 100,000. Coin history is limited by ElectrumX response limits.</p><code>GET /api/v1/status</code></div><div class="section-heading"><h2>Data endpoints</h2></div><div class="card">${table(['GET endpoint','Response'],endpoints.map(([path,description])=>[`<code>/api/v1/${e(path)}</code>`,e(description)]))}</div><div class="section-heading"><h2>Non-custodial wallet requests</h2></div><div class="card api-intro"><h3>Your wallet holds the keys and signs locally</h3><p class="muted">Explicit server opt-in is required for the POST routes. Check <code>GET /api/v1/wallet/capabilities</code> for activation and readiness. Root assets, subassets and unique assets use the same signed-transaction relay. The server never signs or unlocks a Core wallet. Use HTTPS/WSS with a trusted certificate for production wallet connections.</p><p><code>POST /api/v1/wallet/decode</code><br><code>POST /api/v1/wallet/broadcast</code></p><p class="muted">Body: <code>{&quot;hex&quot;:&quot;CLIENT_SIGNED_TRANSACTION_HEX&quot;}</code>. Only hex is accepted, bounded to 100,000 raw bytes. Never send a private key or seed. Decode checks syntax only; signatures, spendability and acceptance are not verified by decoding. Core 2.0.3.01 has no acceptance-preview RPC.</p><p class="muted">Core validates broadcasts with its normal fee and consensus protections. Accepted submissions return txid and accepted:true, which does not guarantee confirmation. A lost connection or timeout returns submission_unknown, accepted:null and the calculated txid: check that ID before submitting again. Rejections use HTTP 422; missing inputs/already-known transactions use 409. The server never automatically retries a broadcast.</p></div><div class="section-heading"><h2>Reference explorer aliases</h2></div><div class="card api-intro"><p class="muted">Familiar routes based on the <a href="https://explorer.raptoreum.com/api" target="_blank" rel="noopener noreferrer">Raptoreum explorer API</a>. Monetary amounts stay precise strings; compatibility does not promise identical numeric types. Large legacy responses fail explicitly above 4 MiB or 5,000 mempool/smartnode records.</p></div><div class="card">${table(['GET alias','Response / availability'],legacy.map(([path,description])=>[`<code>/api/${e(path)}</code>`,e(description)]))}</div>`;
+    return heading('Explorer API','RTM data and client-signed transaction relay · v1') + `<div class="card api-intro"><h3>Build on Raptoreum</h3><p class="muted">Base URL: <code>${e(location.origin)}/api/v1/</code>. Data routes use GET and return JSON. No API key is required. The default limit is 120 requests per minute per connecting IP; overloaded requests return 429 or 503 with Retry-After. Browser CORS/preflight is supported without cookies.</p><p class="muted">Coin and asset atomic quantities are decimal strings (100,000,000 units = 1 RTM or asset unit). Keep strings or use arbitrary-precision arithmetic. Core metadata quantities retain their source units; decimal JSON numbers are strings.</p><p class="muted">Block, transaction and asset routes return 503 until Core is synchronized; address routes also wait for the ElectrumX index. Status and capability routes remain available during sync. Invalid inputs return 400, missing data 404 and unavailable backends 502/503. Asset cursors expire on chain/mempool changes or a backend reconnection: restart the first page. Pages accept up to 100 items (25 for blocks and transaction summaries); offsets stop at 100,000. Coin history is limited by ElectrumX response limits.</p><code>GET /api/v1/status</code></div><div class="section-heading"><h2>Data endpoints</h2></div><div class="card">${table(['GET endpoint','Response'],endpoints.map(([path,description])=>[`<code>/api/v1/${e(path)}</code>`,e(description)]))}</div><div class="section-heading"><h2>Non-custodial wallet requests</h2></div><div class="card api-intro"><h3>Your wallet holds the keys and signs locally</h3><p class="muted">Explicit server opt-in is required for the POST routes. Check <code>GET /api/v1/wallet/capabilities</code> for activation and readiness. Root assets, subassets and unique assets use the same signed-transaction relay. The server never signs or unlocks a Core wallet. Use HTTPS/WSS with a trusted certificate for production wallet connections.</p><p><code>POST /api/v1/wallet/decode</code><br><code>POST /api/v1/wallet/broadcast</code></p><p class="muted">Body: <code>{&quot;hex&quot;:&quot;CLIENT_SIGNED_TRANSACTION_HEX&quot;}</code>. Only hex is accepted, bounded to 100,000 raw bytes. Never send a private key or seed. Decode checks syntax only; signatures, spendability and acceptance are not verified by decoding. Core 2.0.3.01 has no acceptance-preview RPC.</p><p class="muted">Core validates broadcasts with its normal fee and consensus protections. Accepted submissions return txid and accepted:true, which does not guarantee confirmation. A lost connection or timeout returns submission_unknown, accepted:null and the calculated txid: check that ID before submitting again. Rejections use HTTP 422; missing inputs/already-known transactions use 409. The server never automatically retries a broadcast.</p></div><div class="section-heading"><h2>Reference explorer aliases</h2></div><div class="card api-intro"><p class="muted">Familiar routes based on the <a href="https://explorer.raptoreum.com/api" target="_blank" rel="noopener noreferrer">Raptoreum explorer API</a>. Monetary amounts stay precise strings; compatibility does not promise identical numeric types. Large legacy responses fail explicitly above 4 MiB or 5,000 mempool/smartnode records.</p></div><div class="card">${table(['GET alias','Response / availability'],legacy.map(([path,description])=>[`<code>/api/${e(path)}</code>`,e(description)]))}</div>`;
   }
 
   async function render() {
@@ -273,7 +277,7 @@ if (typeof document !== 'undefined') {
       let html;
       if (parts[0] === 'api') html = apiPage();
       else if (parts[0] === 'node') html = await nodePage();
-      else if (!currentStatus?.ready) html = syncView();
+      else if (!coreReady(currentStatus)) html = syncView();
       else if (!parts.length) html = await overview();
       else if (parts[0] === 'blocks') html = await blocksPage(params,path);
       else if (parts[0] === 'transactions') html = await transactionsPage(params,path);
@@ -315,7 +319,7 @@ if (typeof document !== 'undefined') {
     clearTimeout(pollTimer);
     if (refreshing || document.hidden) return;
     refreshing = true;
-    const wasReady = currentStatus?.ready;
+    const wasReady = currentStatus?.ready, wasCoreReady = coreReady(currentStatus);
     const previousTip = currentStatus?.core?.bestblockhash;
     try {
       updateStatus(await api('status'));
@@ -326,10 +330,10 @@ if (typeof document !== 'undefined') {
       failures=currentStatus.phase==='core_unavailable' ? failures+1 : 0;
       const dynamic=/^#\/(?:node|network|smartnodes)(?:\?|$)/.test(location.hash);
       const latest=(!location.hash || location.hash==='#/' || /^#\/(?:blocks|transactions)(?:\?|$)/.test(location.hash)) && previousTip!==currentStatus.core?.bestblockhash;
-      if (manual || renderFailed || dynamic || latest || wasReady !== currentStatus.ready || !currentStatus.ready) await render();
+      if (manual || renderFailed || dynamic || latest || wasReady !== currentStatus.ready || wasCoreReady !== coreReady(currentStatus) || !coreReady(currentStatus)) await render();
     } catch (error) {
       failures++;
-      updateStatus({...currentStatus,ready:false, phase:'core_unavailable',core_stale:!!currentStatus?.core});
+      updateStatus({...currentStatus,ready:false,core_ready:false, phase:'core_unavailable',core_stale:!!currentStatus?.core});
       await render();
     } finally {
       refreshing = false;

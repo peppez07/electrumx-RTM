@@ -37,3 +37,12 @@ assert.equal(formatBytes(null), "Unavailable");
   assert.equal(indexProgress({}), null);
   console.log('UI index progress: passed');
 }
+
+{
+  const {coreReady} = require('../../electrumx/explorer/static/app.js');
+  assert.equal(coreReady({ready: false, core_ready: true}), true);
+  assert.equal(coreReady({ready: true}), true);
+  assert.equal(coreReady({ready: false, core_ready: false}), false);
+  assert.equal(coreReady(null), false);
+  console.log('UI core readiness: passed');
+}

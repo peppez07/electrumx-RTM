@@ -87,6 +87,7 @@ class CompatibilityAPI:
         original = request.match_info.get('address', request.query.get('address', ''))
         address, _, legacy = original.partition('&')
         scripthash = address_hash(address)
+        await self.explorer.gate(index=True)
         balance = await self.explorer.electrum.call('blockchain.scripthash.get_balance', [scripthash])
         atomic = str(balance['confirmed'])
         full = atomic_to_rtm(atomic)

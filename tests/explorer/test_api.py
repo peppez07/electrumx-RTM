@@ -350,3 +350,27 @@ async def test_unreachable_index_without_progress_stays_unavailable(explorer):
     electrum.call = closed
     status = await (await client.get('/api/v1/status')).json()
     assert status['phase'] == 'index_unavailable' and status['electrumx'] == {'ready': False}
+
+
+@pytest.mark.asyncio
+async def test_core_data_is_served_while_the_index_builds(explorer):
+    client, _, electrum = explorer
+    from electrumx.explorer.clients import BackendError
+    async def closed(*args):
+        raise BackendError()
+    async def progress():
+        return {'indexed_height': 40, 'daemon_height': 100}
+    electrum.call, electrum.index_progress = closed, progress
+    status = await (await client.get('/api/v1/status')).json()
+    assert status['core_ready'] and not status['index_ready'] and not status['ready']
+    for path in ['/api/v1/overview', '/api/v1/blocks', '/api/v1/blocks/100',
+                 '/api/v1/transactions/'+TXID, '/api/v1/assets', '/api/v1/assets/'+ASSET,
+                 '/api/v1/search?q=100']:
+        response = await client.get(path)
+        assert response.status == 200, path
+        assert response.headers['X-Indexed-Height'] == '100'
+    for path in ['/api/v1/addresses/'+ADDRESS, '/api/v1/addresses/'+ADDRESS+'/history',
+                 '/api/v1/addresses/'+ADDRESS+'/assets']:
+        response = await client.get(path)
+        body = await response.json()
+        assert response.status == 503 and '40 of 100 blocks' in body['error']['message'], path
