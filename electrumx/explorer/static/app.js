@@ -42,13 +42,13 @@ function formatBytes(value) {
 }
 /**
  * Pays a gift through the MetaYoshi dApp provider (window.metayoshi / window.rtm):
- * connect, then request an RTM payment that the user confirms in the wallet.
+ * one RTM payment request that the user unlocks (if needed) and confirms in the
+ * wallet. No connect step: the site never needs the payer's address.
  * Returns {txid} or {error, cancelled}; never throws.
  */
 async function giftYoshi(provider, to, amount) {
   if (!provider || typeof provider.request !== 'function') return {error:'MetaYoshi wallet not found. Install the extension, or send '+amount+' RTM to the address above.'};
   try {
-    await provider.request({method:'wallet_requestAccounts'});
     const result = await provider.request({method:'wallet_sendTransaction', params:{to, amount:String(amount)}});
     const txid = result && (result.txid || result.hash);
     return txid ? {txid:String(txid)} : {error:'The wallet did not return a transaction ID.'};
@@ -414,7 +414,7 @@ if (typeof document !== 'undefined') {
   if(giftButton && giftStatus) giftButton.addEventListener('click',async()=>{
     const {to,amount}=giftButton.dataset;
     giftButton.disabled=true;giftStatus.className='gift-status';
-    giftStatus.textContent='Confirm the '+amount+' RTM gift in MetaYoshi…';
+    giftStatus.textContent='Confirm the '+amount+' RTM gift in MetaYoshi. Not open? Click its toolbar icon or press Alt+Shift+M.';
     const outcome=await giftYoshi(await providerReady(),to,amount);
     giftButton.disabled=false;
     if(outcome.txid) {
