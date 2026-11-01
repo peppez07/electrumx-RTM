@@ -10,7 +10,12 @@ async def test_ui_and_assets_served_with_same_origin_security():
     async with TestClient(TestServer(create_app(Core(), Electrum()))) as client:
         response = await client.get('/')
         assert response.status == 200
-        assert 'Raptoreum' in await response.text()
+        page = await response.text()
+        assert 'Raptoreum' in page
+        # Donation address and the MetaYoshi gift button (wired up in app.js; the CSP allows no inline script).
+        assert 'RM2yPaWZYmDo5HfqAtfYsh1jhSi9rVncuu' in page
+        assert 'id="gift-yoshi"' in page and 'data-amount="1000"' in page and 'Buy Yoshi a gift!' in page
+        assert 'RVLFQj4RiMCDDrWGZXRd2ui1NKGQ9ieooz' not in page and 'onclick' not in page
         for name, content_type in [('app.js', 'javascript'), ('style.css', 'text/css')]:
             response = await client.get('/static/'+name)
             assert response.status == 200

@@ -40,7 +40,24 @@ function formatBytes(value) {
   while(value>=1024 && unit<units.length-1) { value/=1024;unit++; }
   return Number(value.toFixed(1)).toLocaleString('en-US')+' '+units[unit];
 }
-if (typeof module !== 'undefined') module.exports = {escapeHTML, formatAtomic, loadAssetData, progressLabel, coreReady, indexProgress, refreshDelay, formatBytes};
+/**
+ * Pays a gift through the MetaYoshi dApp provider (window.metayoshi / window.rtm):
+ * connect, then request an RTM payment that the user confirms in the wallet.
+ * Returns {txid} or {error, cancelled}; never throws.
+ */
+async function giftYoshi(provider, to, amount) {
+  if (!provider || typeof provider.request !== 'function') return {error:'MetaYoshi wallet not found. Install the extension, or send '+amount+' RTM to the address above.'};
+  try {
+    await provider.request({method:'wallet_requestAccounts'});
+    const result = await provider.request({method:'wallet_sendTransaction', params:{to, amount:String(amount)}});
+    const txid = result && (result.txid || result.hash);
+    return txid ? {txid:String(txid)} : {error:'The wallet did not return a transaction ID.'};
+  } catch (error) {
+    if (error && error.code === 4001) return {error:'Gift cancelled.', cancelled:true};
+    return {error:(error && error.message) || 'The payment could not be sent.'};
+  }
+}
+if (typeof module !== 'undefined') module.exports = {escapeHTML, formatAtomic, loadAssetData, progressLabel, coreReady, indexProgress, refreshDelay, formatBytes, giftYoshi};
 if (typeof document !== 'undefined') {
   const e = escapeHTML, enc = encodeURIComponent, $ = id => document.getElementById(id);
   let currentStatus = null, generation = 0, refreshing = false, pollTimer, failures = 0;
@@ -385,4 +402,27 @@ if (typeof document !== 'undefined') {
   });
   if(location.hash.startsWith('#/node')) render();
   refreshStatus();
+
+  // "Buy Yoshi a gift": the MetaYoshi provider may announce itself after this script runs.
+  const giftButton=$('gift-yoshi'), giftStatus=$('gift-status');
+  const walletProvider=()=>window.metayoshi || window.rtm || null;
+  const providerReady=()=>walletProvider() ? Promise.resolve(walletProvider()) : new Promise(resolve=>{
+    const done=()=>resolve(walletProvider());
+    window.addEventListener('metayoshi#initialized',done,{once:true});
+    setTimeout(done,1500);
+  });
+  if(giftButton && giftStatus) giftButton.addEventListener('click',async()=>{
+    const {to,amount}=giftButton.dataset;
+    giftButton.disabled=true;giftStatus.className='gift-status';
+    giftStatus.textContent='Confirm the '+amount+' RTM gift in MetaYoshi…';
+    const outcome=await giftYoshi(await providerReady(),to,amount);
+    giftButton.disabled=false;
+    if(outcome.txid) {
+      giftStatus.className='gift-status ok';
+      giftStatus.innerHTML='Thank you! Gift sent: '+link('tx',outcome.txid);
+    } else {
+      giftStatus.className='gift-status'+(outcome.cancelled?'':' error');
+      giftStatus.textContent=outcome.error;
+    }
+  });
 }

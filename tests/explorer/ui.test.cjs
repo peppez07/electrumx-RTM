@@ -46,3 +46,20 @@ assert.equal(formatBytes(null), "Unavailable");
   assert.equal(coreReady(null), false);
   console.log('UI core readiness: passed');
 }
+
+{
+  const {giftYoshi} = require('../../electrumx/explorer/static/app.js');
+  const TO = 'RM2yPaWZYmDo5HfqAtfYsh1jhSi9rVncuu';
+  (async()=>{
+    const calls = [];
+    const wallet = {request: async payload => { calls.push(payload); return payload.method === 'wallet_sendTransaction' ? {hash:'ab'.repeat(32), txid:'ab'.repeat(32)} : [TO]; }};
+    assert.deepEqual(await giftYoshi(wallet, TO, '1000'), {txid:'ab'.repeat(32)});
+    assert.deepEqual(calls, [{method:'wallet_requestAccounts'}, {method:'wallet_sendTransaction', params:{to:TO, amount:'1000'}}]);
+    const rejecting = {request: async () => { throw {code:4001, message:'User rejected the request'}; }};
+    assert.deepEqual(await giftYoshi(rejecting, TO, '1000'), {error:'Gift cancelled.', cancelled:true});
+    const failing = {request: async payload => { if (payload.method === 'wallet_sendTransaction') throw new Error('Insufficient confirmed RTM'); return [TO]; }};
+    assert.deepEqual(await giftYoshi(failing, TO, '1000'), {error:'Insufficient confirmed RTM'});
+    assert.match((await giftYoshi(null, TO, '1000')).error, /MetaYoshi wallet not found.*1000 RTM/);
+    console.log('Gift payment through the MetaYoshi provider: passed');
+  })().catch(error=>{console.error(error);process.exitCode=1});
+}
