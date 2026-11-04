@@ -70,7 +70,7 @@ function formatBytes(value) {
  * Returns {txid} or {error, cancelled}; never throws.
  */
 async function giftYoshi(provider, to, amount) {
-  if (!provider || typeof provider.request !== 'function') return {error:'MetaYoshi wallet not found. Install the extension, or send '+amount+' RTM to the address above.'};
+  if (!provider || typeof provider.request !== 'function') return {error:'MetaYoshi wallet not found. Install the extension, or send '+amount+' RTM to the address above.', missing:true};
   try {
     const result = await provider.request({method:'wallet_sendTransaction', params:{to, amount:String(amount)}});
     const txid = result && (result.txid || result.hash);
@@ -495,6 +495,9 @@ if (typeof document !== 'undefined') {
     if(outcome.txid) {
       giftStatus.className='gift-status ok';
       giftStatus.innerHTML='Thank you! Gift sent: '+link('tx',outcome.txid);
+    } else if(outcome.missing) {
+      giftStatus.className='gift-status error';
+      giftStatus.innerHTML='MetaYoshi wallet not detected. <a href="https://github.com/peppez07/metayoshi_application" target="_blank" rel="noopener noreferrer">Get the MetaYoshi extension (Firefox / Chrome) ↗</a>, or send '+escapeHTML(amount)+' RTM to the address above.';
     } else {
       giftStatus.className='gift-status'+(outcome.cancelled?'':' error');
       giftStatus.textContent=outcome.error;

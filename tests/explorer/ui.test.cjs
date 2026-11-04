@@ -68,6 +68,7 @@ assert.equal(formatBytes(null), "Unavailable");
     const failing = {request: async payload => { if (payload.method === 'wallet_sendTransaction') throw new Error('Insufficient confirmed RTM'); return [TO]; }};
     assert.deepEqual(await giftYoshi(failing, TO, '1000'), {error:'Insufficient confirmed RTM'});
     assert.match((await giftYoshi(null, TO, '1000')).error, /MetaYoshi wallet not found.*1000 RTM/);
+    assert.equal((await giftYoshi(null, TO, '1000')).missing, true);
     console.log('Gift payment through the MetaYoshi provider: passed');
   })().catch(error=>{console.error(error);process.exitCode=1});
 }

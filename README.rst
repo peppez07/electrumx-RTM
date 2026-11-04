@@ -912,12 +912,14 @@ Support development
 Donations help support development, maintenance, and testing.
 
 * **RTM (Raptoreum mainnet):** ``RM2yPaWZYmDo5HfqAtfYsh1jhSi9rVncuu``
-* **ETH (Ethereum):** ``0xf6d9b356D15dBB089B2033173A3993c14a8955CD``
+* **ETH (Ethereum):** ``0xa1B3c81Dc36E256C5F270392c2ebE1aa9240F7Df``
 
 The explorer footer has a **Buy Yoshi a gift! 1000 RTM** button. With the
 MetaYoshi extension installed, it requests a 1000 RTM payment to the address
 above (``wallet_sendTransaction``, no separate connect step); MetaYoshi asks
-you to unlock if needed and sends only after you confirm.
+you to unlock if needed and sends only after you confirm. If MetaYoshi is not
+detected, the footer links to the extension project at
+https://github.com/peppez07/metayoshi_application.
 
 Documentation
 =============
