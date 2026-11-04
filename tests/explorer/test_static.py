@@ -21,6 +21,7 @@ async def test_ui_and_assets_served_with_same_origin_security():
             assert response.status == 200
             assert content_type in response.headers['Content-Type']
             assert "script-src 'self'" in response.headers['Content-Security-Policy']
+            assert 'img-src \'self\' data: https://ipfsm.raptoreum.com' in response.headers['Content-Security-Policy']
         assert (await client.get('/static/../clients.py')).status == 404
 
 

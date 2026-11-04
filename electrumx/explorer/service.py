@@ -463,7 +463,7 @@ def create_app(core, electrum, rate_limit=120, status_ttl=10, enable_wallet_api=
             response.headers['Retry-After'] = '15'
         response.headers.update({'X-Content-Type-Options': 'nosniff',
             'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'DENY',
-            'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"})
+            'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://ipfsm.raptoreum.com; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"})
         if request.path.startswith('/api/'):
             response.headers['Cache-Control'] = 'no-store'
             response.headers['Access-Control-Allow-Origin'] = '*'

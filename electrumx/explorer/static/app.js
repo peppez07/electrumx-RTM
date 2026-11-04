@@ -10,6 +10,29 @@ function formatAtomic(value) {
   const fraction = (abs % 100000000n).toString().padStart(8, '0').replace(/0+$/, '');
   return (negative ? '-' : '') + whole + (fraction ? '.' + fraction : '');
 }
+function formatAssetSupply(value, decimalPoint) {
+  if (value === null || value === undefined) return 'Unavailable';
+  const raw = String(value);
+  if (!/^-?\d+$/.test(raw)) return raw;
+  const places = Number.isInteger(Number(decimalPoint)) && Number(decimalPoint) >= 0 &&
+    Number(decimalPoint) <= 8 ? Number(decimalPoint) : 0;
+  const amount = BigInt(raw), negative = amount < 0n, whole = (negative ? -amount : amount)
+    .toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return (negative ? '-' : '') + whole + (places ? '.' + '0'.repeat(places) : '');
+}
+function mintProgress(minted, maximum) {
+  if (!/^\d+$/.test(String(minted)) || !/^\d+$/.test(String(maximum)) ||
+      BigInt(maximum) <= 0n) return null;
+  const count = BigInt(minted), limit = BigInt(maximum);
+  const percent = Number(count >= limit ? 10000n : count * 10000n / limit) / 100;
+  return {label:String(minted)+' / '+String(maximum), percent};
+}
+function ipfsURL(referenceHash) {
+  const cid = String(referenceHash || '');
+  if (!/^Qm[1-9A-HJ-NP-Za-km-z]{44}$/.test(cid) &&
+      !/^b[a-z2-7]{20,}$/i.test(cid)) return null;
+  return 'https://ipfsm.raptoreum.com/get/'+encodeURIComponent(cid);
+}
 async function loadAssetData(id, query, fetchAPI) {
   const data = await fetchAPI('assets/'+encodeURIComponent(id));
   let holders;
@@ -57,7 +80,7 @@ async function giftYoshi(provider, to, amount) {
     return {error:(error && error.message) || 'The payment could not be sent.'};
   }
 }
-if (typeof module !== 'undefined') module.exports = {escapeHTML, formatAtomic, loadAssetData, progressLabel, coreReady, indexProgress, refreshDelay, formatBytes, giftYoshi};
+if (typeof module !== 'undefined') module.exports = {escapeHTML, formatAtomic, formatAssetSupply, mintProgress, ipfsURL, loadAssetData, progressLabel, coreReady, indexProgress, refreshDelay, formatBytes, giftYoshi};
 if (typeof document !== 'undefined') {
   const e = escapeHTML, enc = encodeURIComponent, $ = id => document.getElementById(id);
   let currentStatus = null, generation = 0, refreshing = false, pollTimer, failures = 0;
@@ -208,6 +231,8 @@ if (typeof document !== 'undefined') {
     const name=assetName(data), sub=name.includes('|'), root=name.split('|')[0];
     const tabs=`<div class="tabs">${['overview','holders','metadata'].map(t=>`<a class="${t===tab ? 'active' : ''}" href="#${path}?tab=${t}">${t[0].toUpperCase()+t.slice(1)}</a>`).join('')}</div>`;
     let body, pagination='';
+    const reference=data.ReferenceHash, preview=ipfsURL(reference);
+    const referenceValue=preview ? `<a class="mono" href="${e(preview)}" target="_blank" rel="noopener noreferrer">${e(reference)} ↗</a>` : e(reference || 'Unavailable');
     if(tab==='holders') {
       const holders=await api('assets/'+enc(id)+'/holders?'+params);
       body=table(['Address','Confirmed asset balance'],holders.items.map(item=>[link('address',item.address,item.address),e(formatAtomic(item.balance_atomic))]));
@@ -215,8 +240,53 @@ if (typeof document !== 'undefined') {
     } else if(tab==='metadata') {
       body=`<div class="details">${Object.entries(data).map(([key,value])=>row(key,typeof value==='object' ? `<pre>${e(JSON.stringify(value,null,2))}</pre>` : e(value))).join('')}</div>`;
     } else if(tab==='overview') {
-      body=`<div class="details">${row('Asset ID',e(id)+' '+copy(id))}${row('Qualified name',e(name))}${sub ? row('Parent asset',`<a href="#/search/${enc(root)}">${e(root)}</a>`) : ''}${row('Owner',data.owner ? link('address',data.owner,data.owner) : 'Unavailable')}${row('Circulating supply',e(data.Circulating_supply ?? 'Unavailable'))}${row('Decimal places',e(data.Decimalpoint ?? 'Unavailable'))}${row('Updatable',data.Updatable===undefined ? 'Unavailable' : data.Updatable ? 'Yes' : 'No')}${row('Reference',e(data.ReferenceHash ?? 'Unavailable'))}</div>`;
+      const progress=mintProgress(data.MintCount,data.maxMintCount);
+      const distribution=data.Distribution && typeof data.Distribution==='object' ? data.Distribution : {};
+      const distributionRows=Object.entries(distribution).map(([key,value])=>{
+        const label=key.replace(/([a-z])([A-Z])/g,'$1 $2').replace(/_/g,' ');
+        const rendered=key==='TargetAddress' && value ? link('address',value,value) :
+          key==='Amount' ? e(formatAssetSupply(value,data.Decimalpoint)) :
+          value && typeof value==='object' ? `<pre>${e(JSON.stringify(value,null,2))}</pre>` : e(value);
+        return row(label,rendered);
+      }).join('');
+      const basicRows=[
+        row('Asset ID',`<span class="mono">${e(id)}</span> ${copy(id)}`),
+        row('Qualified name',e(name)),
+        sub ? row('Parent asset',`<a href="#/search/${enc(root)}">${e(root)} ↗</a>`) : '',
+        row('Type',badge(data.Isunique ? 'Unique asset' : 'Token')),
+        row('Owner',data.owner ? link('address',data.owner,data.owner) : 'Unavailable'),
+        row('Reference',referenceValue),
+        row('Circulating supply',e(formatAssetSupply(data.Circulating_supply,data.Decimalpoint))),
+        row('Decimal places',e(data.Decimalpoint ?? 'Unavailable')),
+        row('Updatable',data.Updatable===undefined ? 'Unavailable' : data.Updatable ? 'Yes' : 'No')
+      ].join('');
+      const mintRows=row('Mint count',progress ? e(progress.label) : 'Unavailable')+
+        row('Progress',progress ? `<div class="asset-mint-progress"><progress max="100" value="${progress.percent}" aria-label="Minting progress">${progress.percent}%</progress><span>${progress.percent}%</span></div>` : 'Unavailable');
+      body=`
+        <div class="asset-detail-layout">
+          <section class="card asset-preview-card">
+            <div class="card-head"><h3>Asset preview</h3></div>
+            <div class="asset-preview-frame">
+              ${preview ? `<img class="asset-preview-image" src="${e(preview)}" alt="${e(name)} preview" loading="lazy" referrerpolicy="no-referrer"><p class="asset-preview-error" hidden>Preview unavailable from the IPFS gateway.</p>` : '<p class="asset-preview-empty">No IPFS preview is available for this asset.</p>'}
+            </div>
+            ${preview ? `<a class="asset-gateway" href="${e(preview)}" target="_blank" rel="noopener noreferrer">View on IPFS gateway ↗</a>` : ''}
+          </section>
+          <div class="asset-details-column">
+            <section class="card">${tabs}<div class="details">${basicRows}</div></section>
+            <section class="card">
+              <div class="card-head"><h3>Minting status</h3></div>
+              <div class="details">${mintRows}</div>
+            </section>
+            <section class="card">
+              <div class="card-head"><h3>Distribution</h3></div>
+              <div class="details">${distributionRows || '<p class="muted">Distribution details unavailable.</p>'}</div>
+            </section>
+          </div>
+        </div>`;
     } else throw new Error('Unknown asset tab.');
+    if(tab==='overview') {
+      return heading(name,id,badge(sub ? 'Subasset' : 'Root asset')+' '+badge(data.Isunique ? 'Unique' : 'Fungible'))+body+pagination;
+    }
     return heading(name,id,badge(sub ? 'Subasset' : 'Root asset')+' '+badge(data.Isunique ? 'Unique' : 'Fungible'))+`<section class="card">${tabs}${body}</section>`+pagination;
   }
 
@@ -316,6 +386,11 @@ if (typeof document !== 'undefined') {
       if (turn === generation) {
         renderFailed = false;
         $('view').innerHTML = html;
+        const preview=$('view').querySelector('.asset-preview-image');
+        if(preview) preview.addEventListener('error',()=>{
+          preview.hidden=true;
+          preview.nextElementSibling.hidden=false;
+        },{once:true});
         updateResourceSummary();
         document.querySelectorAll('nav details').forEach(menu=>{menu.open=false});
         document.querySelectorAll('nav a').forEach(a=>{

@@ -1,9 +1,17 @@
 const assert = require('node:assert/strict');
-const {formatAtomic, escapeHTML, loadAssetData} = require('../../electrumx/explorer/static/app.js');
+const {formatAtomic, formatAssetSupply, mintProgress, ipfsURL, escapeHTML, loadAssetData} = require('../../electrumx/explorer/static/app.js');
 assert.equal(formatAtomic('900719925474099312345'), '9,007,199,254,740.99312345');
 assert.equal(formatAtomic('-1'), '-0.00000001');
 assert.equal(formatAtomic('100000000'), '1');
 assert.equal(formatAtomic(null), 'Unavailable');
+assert.equal(formatAssetSupply('100000', 8), '100,000.00000000');
+assert.equal(formatAssetSupply('900719925474099312345', 2), '900,719,925,474,099,312,345.00');
+assert.equal(formatAssetSupply('1', 0), '1');
+assert.deepEqual(mintProgress(1, 10), {label:'1 / 10', percent:10});
+assert.equal(mintProgress(0, 0), null);
+assert.equal(ipfsURL('QmWkhq4xH9FTbsHep79f61AVhJE6SNgQ2ovrhxCNxzq5BP'),
+  'https://ipfsm.raptoreum.com/get/QmWkhq4xH9FTbsHep79f61AVhJE6SNgQ2ovrhxCNxzq5BP');
+assert.equal(ipfsURL('javascript:alert(1)'), null);
 assert.equal(escapeHTML('<img src=x onerror="alert(1)">'), '&lt;img src=x onerror=&quot;alert(1)&quot;&gt;');
 console.log('UI amount precision and HTML escaping: passed');
 (async()=>{
